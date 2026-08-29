@@ -12,14 +12,17 @@
 | Сборка | Что | Зависимости |
 |---|---|---|
 | `Dioma.Data` | `.taas` v2 — сохранения; `Json`, `Crc32` | нет |
-| `Dioma.Spikes` | `DiomaBrain` — LIF-alpha, mean-field STDP, гомеостаз, сон, память Болдуина; `SkinnerBox` — протоколы обучения | Data |
+| `Dioma.Spikes` | `DiomaBrain` — LIF-alpha, mean-field STDP, гомеостаз, сон, память Болдуина; `ISpikeKernel` — сменный вычислитель мембраны; `SkinnerBox` | Data |
+| `Dioma.Spikes.Burst` | `BurstSpikeKernel` — та же динамика в нативном коде (мембрана ×1.7) | Spikes, Burst, Collections |
 | `Dioma.Bio` | `Blood` — реакции, рецепторы, эмиттеры, орган «мозг» | нет |
 | `Dioma.Body` | `Creature` — мост сенсоры→мозг→тело→действие; `Genome`/`Instinct` — наследственность; `CreatureSave` | Spikes, Bio, Data |
 | `Dioma.World` | `TestArena` — эталонный мирок для тестов и смоука | Body |
 
 Spikes и Bio изолированы компилятором: спайки ничего не знают о химии,
-химия — о спайках. Все модули `noEngineReferences` — работают headless и
-под чистым .NET. Подробности — `Documentation~/architecture.md`.
+химия — о спайках. `Dioma.Spikes` не зависит от Burst — модуль регистрирует
+себя сам, и билд без него работает на обычном C#. Все модули, кроме
+Burst-обёртки, `noEngineReferences` — работают headless и под чистым .NET.
+Подробности — `Documentation~/architecture.md`.
 
 ## Жизненный цикл существа
 
@@ -60,7 +63,8 @@ var restored = CreatureSave.Load(File.ReadAllBytes("kit.taas"), LoadBrain());
 ```csharp
 using Dioma.Bio; using Dioma.Body; using Dioma.Spikes;
 
-var brain = DiomaBrain.FromJson(File.ReadAllText(connectomeJson));
+// Кернел мембраны: Managed (эталон), Burst (быстрый), Fastest (что есть)
+var brain = DiomaBrain.FromJson(File.ReadAllText(connectomeJson), KernelMode.Fastest);
 var creature = new Creature(brain);           // тело создаётся само
 
 // каждый тик мира (50 мс):

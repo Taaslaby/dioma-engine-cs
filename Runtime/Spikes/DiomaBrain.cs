@@ -18,7 +18,7 @@ using System.Collections.Generic;
 
 namespace Dioma.Spikes
 {
-    public sealed class DiomaBrain
+    public sealed class DiomaBrain : IDisposable
     {
         public sealed class Region
         {
@@ -47,14 +47,15 @@ namespace Dioma.Spikes
         readonly int[] _regionOf;
         readonly float[] _nt;
 
-        // ── Состояние динамики (run_lif_alpha) ──
-        readonly float _timeFactor, _synDecay, _refrSteps;
-        readonly float[] _v, _g, _refrCnt;
-        readonly float[] _ring; // задержка аксонной проводки: size·n
-        readonly int _ringSize;
-        int _ringPos;
-        readonly List<int> _prevFired = new List<int>();
-        readonly int[] _spikes;
+        // ── Динамика мембраны: сменный кернел (см. ISpikeKernel) ──
+        readonly ISpikeKernel _kernel;
+        /// История спайков тика: StepsPerTick × N (0/1). Кернел пишет, пластичность читает.
+        readonly int[] _history;
+        /// Имя активного вычислителя мембраны («managed», «burst»).
+        public string KernelName => _kernel.Name;
+        readonly SpikeLayout _layout;
+        /// Топология и параметры модели — для бенчмарков и своих кернелов.
+        public SpikeLayout KernelLayout() => _layout;
 
         // ── Тик-пластичность (mean-field STDP) ──
         readonly float[] _elig;
@@ -72,7 +73,7 @@ namespace Dioma.Spikes
         // Константы распада (считаются один раз — значения детерминированы).
         readonly float _dPre, _dPost, _dE;
 
-        DiomaBrain(Dictionary<string, object> root)
+        DiomaBrain(Dictionary<string, object> root, KernelMode? kernelMode)
         {
             N = (int)Json.Num(root["n"]);
             Dt = Json.F(root["dt"]);
@@ -189,23 +190,24 @@ namespace Dioma.Spikes
                     _targetInSum[_postOf[idx]] += _values[idx];
 
             // ── alpha-LIF (Shiu et al. 2024): параметры из alpha_lif_population ──
-            _timeFactor = Dt / MathF.Max(_tauM, 1e-6f);
-            _refrSteps = MathF.Max(MathF.Round(_tauRef / Dt), 1.0f);
-            _synDecay = 1.0f - Dt / MathF.Max(_tauSyn, 1e-6f);
-
-            _v = new float[N];
-            _g = new float[N];
-            _refrCnt = new float[N];
-            for (int i = 0; i < N; i++)
+            // Считаются здесь, чтобы любой кернел получил ровно те же числа.
+            var layout = new SpikeLayout
             {
-                _v[i] = _vRest;
-                _refrCnt[i] = _refrSteps; // старт вне рефрактерности
-            }
-
-            _ringSize = (int)MathF.Round(_tDelay / Dt) + 1;
-            _ring = new float[_ringSize * N];
-            _ringPos = _ringSize - 1;
-            _spikes = new int[N];
+                N = N,
+                RowPtr = _rowPtr,
+                ColIdx = _colIdx,
+                Nt = _nt,
+                TimeFactor = Dt / MathF.Max(_tauM, 1e-6f),
+                RefrSteps = MathF.Max(MathF.Round(_tauRef / Dt), 1.0f),
+                SynDecay = 1.0f - Dt / MathF.Max(_tauSyn, 1e-6f),
+                VRest = _vRest,
+                VThresh = _vThresh,
+                VReset = _vReset,
+                RingSize = (int)MathF.Round(_tDelay / Dt) + 1,
+            };
+            _layout = layout;
+            _kernel = SpikeKernels.Create(kernelMode ?? SpikeKernels.Default, layout, _values);
+            _history = new int[StepsPerTick * N];
 
             // ── пластичность ──
             _elig = new float[nSyn];
@@ -222,7 +224,10 @@ namespace Dioma.Spikes
             _dE = FastExp(-Dt / _tauE);
         }
 
-        public static DiomaBrain FromJson(string text) => new DiomaBrain(Json.Parse(text) as Dictionary<string, object>);
+        /// Загрузить мозг из JSON-коннектома. `kernelMode` выбирает вычислитель
+        /// мембраны; по умолчанию — `SpikeKernels.Default`.
+        public static DiomaBrain FromJson(string text, KernelMode? kernelMode = null) =>
+            new DiomaBrain(Json.Parse(text) as Dictionary<string, object>, kernelMode);
 
         public int RegionOf(int neuron) => _regionOf[neuron];
 
@@ -286,6 +291,7 @@ namespace Dioma.Spikes
             int n = Math.Min(_memoryLt.Length, _values.Length);
             for (int i = 0; i < n; i++)
                 _values[i] += alpha * (_memoryLt[i] - _values[i]);
+            _kernel.SyncWeights(_values);
         }
 
         /// Ночная консолидация: сильные выученные дельты (относительно снимка)
@@ -304,6 +310,7 @@ namespace Dioma.Spikes
                     ? _memoryLt[i] + d * (1f + reinforce)
                     : _memoryLt[i] + d * (1f - prune);
             }
+            _kernel.SyncWeights(_values);
         }
 
         /// Сколько веса нажито за жизнь на дуге pre→post: сумма
@@ -350,89 +357,56 @@ namespace Dioma.Spikes
                 throw new ArgumentException(
                     $"весов {vals.Length}, а синапсов {_values.Length}");
             Array.Copy(vals, _values, _values.Length);
+            _kernel.SyncWeights(_values);
         }
 
-        // ── Тик мира: StepsPerTick подшагов + моторные суммы (step_batch_motor) ──
+        // ── Тик мира: StepsPerTick подшагов + моторные суммы ──
+        //
+        // Мембрану считает кернел, пластичность/награды/гомеостаз — мы. Тик
+        // отдаётся кернелу ЦЕЛИКОМ: внутри тика веса константны (награды и
+        // гомеостаз живут на границах), поэтому кернел прогоняет все подшаги
+        // подряд и возвращает историю спайков, а пластичность доигрывается по
+        // ней в том же порядке. Для Burst это один переход в нативный код за
+        // тик вместо ста.
 
         public (int Ml, int Mr, long Spikes) TickMotor(float[] ext, int ml0, int ml1, int mr0, int mr1)
         {
+            _kernel.Run(ext, StepsPerTick, _history);
             long total = 0;
             int ml = 0, mr = 0;
             for (int s = 0; s < StepsPerTick; s++)
             {
-                Substep(ext);
-                for (int i = ml0; i < ml1; i++) ml += _spikes[i];
-                for (int i = mr0; i < mr1; i++) mr += _spikes[i];
-                for (int i = 0; i < N; i++) total += _spikes[i];
+                int at = s * N;
+                for (int i = ml0; i < ml1; i++) ml += _history[at + i];
+                for (int i = mr0; i < mr1; i++) mr += _history[at + i];
+                for (int i = 0; i < N; i++) total += _history[at + i];
+                AfterSubstep(at);
             }
             return (ml, mr, total);
         }
 
-        /// Один подшаг динамики: точный порт run_lif_alpha.
-        void Substep(float[] ext)
+        /// Пост-обработка подшага: следы STDP, счётчик, отложенные награды.
+        /// `at` — смещение подшага в истории спайков.
+        void AfterSubstep(int at)
         {
-            // 1. Внешний ток — прямо в v (voltage jump).
-            for (int i = 0; i < N; i++)
-                _v[i] += ext[i];
-
-            // 2. Шаг нейронов: вход — слот кольца задержки.
-            int readPos = _ringPos;
-            int baseIdx = readPos * N;
-            for (int i = 0; i < N; i++)
-            {
-                float gOld = _g[i];
-                float delayed = _refrCnt[i] >= _refrSteps ? _ring[baseIdx + i] : 0f;
-
-                float integrand = gOld - (_v[i] - _vRest);
-                float vNew = _timeFactor * integrand + _v[i];
-
-                bool spike = vNew > _vThresh; // строгий порог «>»
-                _spikes[i] = spike ? 1 : 0;
-                _v[i] = spike ? _vReset : vNew;
-
-                float gNew = _synDecay * gOld + delayed;
-                _g[i] = spike ? 0f : gNew;
-                _refrCnt[i] = spike ? 0f : _refrCnt[i] + 1f;
-            }
-
-            // 3. Очищаем прочитанный слот, рассыпаем спайки ПРЕДЫДУЩЕГО
-            //    подшага (знак торможения — в множителе), двигаем кольцо.
-            Array.Clear(_ring, baseIdx, N);
-            foreach (int pre in _prevFired)
-            {
-                float sign = _nt[pre] < 0.0f ? -1.0f : 1.0f;
-                for (int k = _rowPtr[pre]; k < _rowPtr[pre + 1]; k++)
-                    // Rust: vals[k].mul_add(sign, slot[post]) — скалярный
-                    // mul_add fused ВСЕГДА; здесь MathF.FusedMultiplyAdd.
-                    _ring[baseIdx + _colIdx[k]] =
-                        FastMath.FusedMulAdd(_values[k], sign, _ring[baseIdx + _colIdx[k]]);
-            }
-            _ringPos = (readPos + 1) % _ringSize;
-
-            // 4. Список стрелявших на этом подшаге — рассыльщик следующего.
-            _prevFired.Clear();
-            for (int i = 0; i < N; i++)
-                if (_spikes[i] != 0)
-                    _prevFired.Add(i);
-
-            TickNoteSpikes();
+            TickNoteSpikes(at);
             PostSubstepTick();
         }
 
         // ── Тик-пластичность (mean-field STDP, один проход за тик) ──
 
-        void TickNoteSpikes()
+        void TickNoteSpikes(int at)
         {
             for (int i = 0; i < N; i++)
             {
-                float add = _spikes[i] > 0 ? 1.0f : 0.0f;
+                float add = _history[at + i] > 0 ? 1.0f : 0.0f;
                 // Rust: tp.mul_add(d, add) — скалярный fused; зеркало следов
                 // обязано совпадать бит-в-бит (ulp расползается хаосом в коре).
                 _tracePre[i] = FastMath.FusedMulAdd(_tracePre[i], _dPre, add);
                 _tracePost[i] = FastMath.FusedMulAdd(_tracePost[i], _dPost, add);
                 _tracePreHist[_tickRow * N + i] = _tracePre[i];
                 _tracePostHist[_tickRow * N + i] = _tracePost[i];
-                if (_spikes[i] > 0)
+                if (_history[at + i] > 0)
                 {
                     _tickSpikeCount[i]++;
                     _tickSpikeSumS[i] += _tickRow;
@@ -576,6 +550,9 @@ namespace Dioma.Spikes
                         _values[idx] *= scale;
                 }
             }
+            // Веса поменялись — кернел должен увидеть новые (он держит копию,
+            // чтобы Burst работал на нативной памяти).
+            _kernel.SyncWeights(_values);
         }
 
         // ── Тик без моторных сумм (холостые тики, зазоры протоколов) ──
@@ -585,11 +562,13 @@ namespace Dioma.Spikes
         /// предыдущих проб, и избирательности обучения не возникает.
         public long Tick(float[] ext)
         {
+            _kernel.Run(ext, StepsPerTick, _history);
             long total = 0;
             for (int s = 0; s < StepsPerTick; s++)
             {
-                Substep(ext);
-                for (int i = 0; i < N; i++) total += _spikes[i];
+                int at = s * N;
+                for (int i = 0; i < N; i++) total += _history[at + i];
+                AfterSubstep(at);
             }
             return total;
         }
@@ -634,5 +613,10 @@ namespace Dioma.Spikes
         static float FastExp(float x) => FastMath.FastExp(x);
 
         static float Powi(float b, int e) => FastMath.Powi(b, e);
+
+        /// Освободить нативную память кернела (Burst держит NativeArray).
+        /// Managed-кернел ничего не делает, так что вызывать не обязательно —
+        /// но в долгих сессиях со спавном существ лучше не забывать.
+        public void Dispose() => _kernel.Dispose();
     }
 }

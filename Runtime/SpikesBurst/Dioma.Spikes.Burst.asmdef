@@ -1,0 +1,24 @@
+{
+    "name": "Dioma.Spikes.Burst",
+    "rootNamespace": "Dioma.Spikes.Burst",
+    "references": [
+        "Dioma.Spikes",
+        "Unity.Burst",
+        "Unity.Collections"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.burst",
+            "expression": "1.8.0",
+            "define": "DIOMA_BURST"
+        }
+    ],
+    "noEngineReferences": false
+}

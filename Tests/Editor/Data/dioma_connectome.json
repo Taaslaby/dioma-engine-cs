@@ -2,7 +2,7 @@
  "n":96, "dt":0.5, "stepsPerTick":100,
  "lif":{"tauRef":2.2,"tauM":20.0,"vRest":-52.0,"vThresh":-45.0,"vReset":-52.0,"tauSyn":3.0,"tDelay":1.8},
  "stdp":{"tauPre":20.0,"tauPost":20.0,"tauE":1000.0,"aLtp":0.1,"aLtd":0.005,"lr":0.15,"wMin":0.0,"wMax":6},
- "plasticity":{"homeoRate":0.25,"rewardDelayTicks":1,"homeoEveryTicks":0},
+ "plasticity":{"homeoRate":0.25,"rewardDelayTicks":1,"homeoEveryTicks":0,"homeoExcludePre":[]},
  "seed":42,
  "regions":[{"tag":"SL","start":0,"end":20,"inhibitory":false},{"tag":"SR","start":20,"end":40,"inhibitory":false},{"tag":"I","start":40,"end":56,"inhibitory":true},{"tag":"ML","start":56,"end":76,"inhibitory":false},{"tag":"MR","start":76,"end":96,"inhibitory":false}],
  "gains":[[0,0,0.8,1,0],[0,0,0.8,0,1],[0,0,0,1,1],[0,0,0,0,0],[0,0,0,0,0]],

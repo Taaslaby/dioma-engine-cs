@@ -1,8 +1,8 @@
 {
-  "name": "com.dioma.spikes",
-  "version": "0.1.0",
-  "displayName": "Dioma Spikes",
-  "description": "Ядро спайковой симуляции dioma: LIF-alpha (Shiu et al. 2024) + mean-field дофаминовая STDP + мягкий гомеостаз. Порт Rust-движка dioma-engine на C#, паритет с Rust-эталоном (золотой след) — тестом.",
+  "name": "com.dioma.engine",
+  "version": "0.2.0",
+  "displayName": "Dioma Engine",
+  "description": "Движок выращиваемых спайковых существ: спайковый мозг (LIF-alpha + дофаминовая STDP), биохимия тела (реакции крови, голод, утомление, гормоны) и мост между ними. Порт Rust-движка dioma-engine на C#; паритет с эталоном держат тесты золотого следа. Модули изолированы asmdef: Spikes и Bio ничего не знают друг о друге, мир — забота игры.",
   "unity": "6000.0",
   "author": {
     "name": "Atlasov Anton"
@@ -12,7 +12,9 @@
     "neural",
     "simulation",
     "STDP",
-    "LIF"
+    "LIF",
+    "metabolism",
+    "artificial-life"
   ],
   "dependencies": {}
 }

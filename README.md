@@ -1,58 +1,85 @@
-# Dioma Spikes
+# Dioma Engine
 
-Ядро спайковой симуляции dioma для Unity. Порт CPU-пути `dioma-engine`
-(Rust) на C#: коннектом из grown-рёбер → **LIF-alpha** (Shiu et al. 2024,
-аксонная задержка кольцевым буфером) → **mean-field дофаминовая STDP**
-за тик → мягкий гомеостаз весов.
+Движок выращиваемых спайковых существ для Unity: мозг — настоящая спайковая
+сеть (LIF-alpha + дофаминовая STDP), тело — биохимия крови (голод,
+утомление, гормоны), мир — забота игры.
 
-Паритет с Rust-эталоном поддерживается тестом «золотого следа»:
-`export_connectome.rs` (в репозитории dioma) растит коннектом, гоняет
-240 тиков сценария и экспортирует JSON; тест в пакете реплеит тот же
-сценарий на C# и сверяет моторные суммы и контрольные суммы весов.
+Порт Rust-движка dioma-engine; паритет с эталоном держат тесты золотых
+следов.
 
-## Использование
+## Модули
+
+| Сборка | Что | Зависимости |
+|---|---|---|
+| `Dioma.Spikes` | `DiomaBrain` — LIF-alpha, mean-field STDP, гомеостаз, сон | нет |
+| `Dioma.Bio` | `Blood` — реакции, рецепторы, эмиттеры, орган «мозг» | нет |
+| `Dioma.Body` | `Creature` — мост сенсоры→мозг→тело→действие; `Sense`/`MotorAction` | Spikes, Bio |
+| `Dioma.World` | `TestArena` — эталонный мирок для тестов и смоука | Body |
+
+Spikes и Bio изолированы компилятором: спайки ничего не знают о химии,
+химия — о спайках. Все модули `noEngineReferences` — работают headless и
+под чистым .NET. Подробности — `Documentation~/architecture.md`.
+
+## Быстрый старт
 
 ```csharp
-using Dioma.Spikes;
+using Dioma.Bio; using Dioma.Body; using Dioma.Spikes;
 
-var brain = DiomaBrain.FromJson(File.ReadAllText(connectomeJsonPath));
+var brain = DiomaBrain.FromJson(File.ReadAllText(connectomeJson));
+var creature = new Creature(brain);           // тело создаётся само
 
-// тик мира (50 мс): 100 подшагов LIF, моторные суммы регионов ML/MR
-var (ml, mr, totalSpikes) = brain.TickMotor(ext, ml0, ml1, mr0, mr1);
-
-// подкрепление: дофамин с задержкой (dt=0.5 мс, 100 подшагов/тик)
-brain.ScheduleReward(1.0f);   // за еду
-brain.RewardNow(-0.5f);       // наказание (удар о стену) немедленно
+// каждый тик мира (50 мс):
+var sense = new Sense {
+    SmellL = …, SmellR = …,   // градиент запаха по бортам
+    WallL  = …, WallR  = …,   // только для мозгов с регионами WL/WR
+    VisL   = …, VisR   = …,
+    FoodNear = …,             // еда в радиусе укуса
+    WallHit  = …,             // движение заблокировано (боль)
+};
+var action = creature.Tick(sense);
+if (action.Asleep) return;    // спит — не двигать и не кормить
+// action.Steer (−1..1) — от мозга; action.Drive (0..1) — от крови; action.Eat
 ```
 
-`ext` — внешний ток на нейрон (в мВ на подшаг: ток добавляется прямо
-в мембранный потенциал, как в Rust-оригинале). Сенсорные токи размазываются
-по диапазонам регионов (`brain.Regions[i].Start/End`).
+Диагностика доступна напрямую: `creature.Blood.Conc[Chem.Hunger]`,
+`creature.LastSpikes`, `creature.FoodEaten`, `creature.Blood.Organ.Damage`.
 
-## Формат входного JSON
+## Коннектомы
 
-`n`, `dt`, `stepsPerTick`, `lif` (tauRef/tauM/vRest/vThresh/vReset/tauSyn/tDelay),
-`stdp` (tauPre/tauPost/tauE/aLtp/aLtd/lr/wMin/wMax), `plasticity`
-(homeoRate/rewardDelayTicks/homeoEveryTicks), `regions` (tag/start/end/inhibitory),
-`gains` (матрица гейнов анатомии region×region), `nt` (±1 на нейрон),
-`edges` ([[pre, post, weight], …] — grown-рёбра до гейнов).
+Мозг загружается из JSON, который выращивает Rust-эталон:
 
-Готовый ассет — `Tests/Editor/Data/dioma_connectome.json`
-(`agent_layout`, 96 нейронов, сид 42).
+```
+cargo run --release --bin export_connectome -- <dir> both
+cargo run --release --bin export_bio        -- <dir>
+```
 
-## Детерминизм
+Готовые ассеты в `Tests/Editor/Data/`:
 
-Численные кернелы портированы с сохранением порядка операций Rust-эталона
-(сборка без FMA): `fast_exp` — не-fused Horner + масштаб через биты
-экспоненты; `powi` — square-and-multiply от младших битов. Тест паритета
-держит **точное совпадение моторных сумм** на всём золотом следе; суммы
-весов расходятся не более ~1e-4 относительно (ulp `powi`).
+| Файл | Мозг |
+|---|---|
+| `dioma_connectome.json` | `agent_layout`: 96 нейронов, 5 регионов (SL/SR/I/ML/MR) |
+| `dioma_c_connectome.json` | `stage_c_lite`: 760 нейронов, 11 регионов (+стены, зрение, кора) |
+
+Формат: `n`, `dt`, `stepsPerTick`, `lif`, `stdp`, `plasticity`, `regions`
+(тег/границы/тормозной), `gains` (матрица гейнов анатомии), `nt` (±1),
+`edges` (grown-рёбра до гейнов). Гейны — это врождённые рефлексы: SL→ML и
+SR→MR = 1.0, WL→MR = WR→ML = 2.0 (отворот сильнее гоминга), кора→моторы 0.1.
 
 ## Тесты
 
-EditMode, запуск через Test Runner или CLI:
+EditMode; путь к данным через `PackageInfo.resolvedPath`, так что работают и
+для embedded-, и для `file:`-подключения пакета.
 
 ```
 Unity.exe -batchmode -projectPath <proj> -runTests -testPlatform EditMode \
   -testResults results.xml -logFile tests.log
 ```
+
+Проверяют: паритет мозга (240 тиков × 2 коннектома, точные моторные суммы),
+паритет биохимии (600 тиков, все химии/локусы/параметры), поведение арены
+(существо ест, засыпает, не бьётся о стены), контрольные точки метаболизма
+(кортизол переживает боль, утомление насыщается за 60 тиков полного газа,
+сон капит глюкозу ниже порога изобилия).
+
+Быстрая итерация без редактора — dotnet-харнесс `tools/csharpsmoke` в
+проекте dioma-unity (`dotnet run -c Release -- parity|bio|arena`).

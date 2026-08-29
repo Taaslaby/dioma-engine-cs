@@ -28,18 +28,40 @@ namespace Dioma.Spikes
         public readonly List<TickRow> Rows;
         public int Cursor;
 
+        // Индексы регионов WL/WR (-1 — нет: стена идёт в SL/SR).
+        readonly int _wallL, _wallR;
+        float[] _ext;
+
         GoldenRunner(DiomaBrain brain, List<TickRow> rows)
         {
             Brain = brain;
             Rows = rows;
+            _wallL = FindRegion(brain, "WL");
+            _wallR = FindRegion(brain, "WR");
         }
 
-        public static GoldenRunner Load(string dataDir)
+        internal static int FindRegion(DiomaBrain brain, string tag)
+        {
+            for (int i = 0; i < brain.Regions.Length; i++)
+                if (brain.Regions[i].Tag == tag)
+                    return i;
+            return -1;
+        }
+
+        DiomaBrain.Region Region(string tag)
+        {
+            int i = FindRegion(Brain, tag);
+            if (i < 0)
+                throw new InvalidOperationException($"в коннектоме нет региона {tag}");
+            return Brain.Regions[i];
+        }
+
+        public static GoldenRunner Load(string dataDir, string prefix = "dioma")
         {
             var brain = DiomaBrain.FromJson(
-                File.ReadAllText(Path.Combine(dataDir, "dioma_connectome.json")));
+                File.ReadAllText(Path.Combine(dataDir, prefix + "_connectome.json")));
             var golden = Json.Obj(Json.Parse(
-                File.ReadAllText(Path.Combine(dataDir, "dioma_golden.json"))));
+                File.ReadAllText(Path.Combine(dataDir, prefix + "_golden.json"))));
             var rows = new List<TickRow>();
             foreach (var t in Json.Arr(golden["ticks"]))
             {
@@ -71,23 +93,27 @@ namespace Dioma.Spikes
             const float basal = 0.12f;
             const float smellCurrent = 4.0f;
             const float wallCurrent = 4.0f;
-            const float steerScale = 0.25f;
             const float eatDopamine = 1.0f;
             const float wallDopamine = -0.5f;
 
-            var sl = brain.Regions[0];
-            var sr = brain.Regions[1];
-            var ml = brain.Regions[3];
-            var mr = brain.Regions[4];
+            // Маршрутизация сенсоров по тегам (как в export_connectome.rs):
+            // SL/SR ← запах, WL/WR ← стена; нет WL/WR — стена в SL/SR.
+            var sl = Region("SL");
+            var sr = Region("SR");
+            var wl = _wallL >= 0 ? brain.Regions[_wallL] : sl;
+            var wr = _wallR >= 0 ? brain.Regions[_wallR] : sr;
+            var ml = Region("ML");
+            var mr = Region("MR");
 
-            var ext = new float[brain.N];
+            if (_ext == null || _ext.Length != brain.N) _ext = new float[brain.N];
+            var ext = _ext;
             for (int i = 0; i < brain.N; i++) ext[i] = basal;
             // Порядок сложений — как в export_connectome.rs (сначала запах,
             // затем стены), иначе ulp-расхождения в ulp-чувствительных тиках.
             for (int i = sl.Start; i < sl.End; i++) ext[i] += row.Sl * smellCurrent;
             for (int i = sr.Start; i < sr.End; i++) ext[i] += row.Sr * smellCurrent;
-            for (int i = sl.Start; i < sl.End; i++) ext[i] += row.Wl * wallCurrent;
-            for (int i = sr.Start; i < sr.End; i++) ext[i] += row.Wr * wallCurrent;
+            for (int i = wl.Start; i < wl.End; i++) ext[i] += row.Wl * wallCurrent;
+            for (int i = wr.Start; i < wr.End; i++) ext[i] += row.Wr * wallCurrent;
 
             var (mlSum, mrSum, spikes) =
                 brain.TickMotor(ext, ml.Start, ml.End, mr.Start, mr.End);

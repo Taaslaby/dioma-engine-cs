@@ -1,8 +1,11 @@
 {
-    "name": "Dioma.Spikes.Tests",
-    "rootNamespace": "Dioma.Spikes.Tests",
+    "name": "Dioma.Tests",
+    "rootNamespace": "Dioma.Tests",
     "references": [
-        "Dioma.Spikes.Runtime"
+        "Dioma.Spikes",
+        "Dioma.Bio",
+        "Dioma.Body",
+        "Dioma.World"
     ],
     "includePlatforms": [
         "Editor"

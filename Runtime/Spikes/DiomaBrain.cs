@@ -1,5 +1,4 @@
 // Порт ядра мозга dioma (dioma-engine::brain::dynamics::neurons + pillars
-// alpha-LIF) на C#. Этап 1 «самое нужное»: CPU-путь LIF-alpha без GPU/HAAP.
 //
 // Семантика — бит-в-бит с Rust-эталоном (сборка без target_feature=fma,
 // поэтому все mul_add в горячем пути — ДВУХРАУНДОВЫЕ обычные mul+add):
@@ -36,6 +35,7 @@ namespace Dioma.Spikes
         readonly float _tauRef, _tauM, _vRest, _vThresh, _vReset, _tauSyn, _tDelay;
         readonly float _tauPre, _tauPost, _tauE, _aLtp, _aLtd, _lr, _wMin, _wMax, _homeoRate;
         readonly int _rewardDelayTicks, _homeoEveryTicks;
+        readonly HashSet<int> _homeoExcludePre = new HashSet<int>();
 
         // ── CSR-коннектом (build_connectome) ──
         readonly int[] _rowPtr, _colIdx;
@@ -43,6 +43,7 @@ namespace Dioma.Spikes
         readonly int[] _preOf, _postOf;
         readonly bool[] _inhSyn;
         readonly float[] _targetInSum;
+        readonly int[] _regionOf;
         readonly float[] _nt;
 
         // ── Состояние динамики (run_lif_alpha) ──
@@ -97,6 +98,10 @@ namespace Dioma.Spikes
             _homeoRate = Json.F(plast["homeoRate"]);
             _rewardDelayTicks = (int)Json.Num(plast["rewardDelayTicks"]);
             _homeoEveryTicks = (int)Json.Num(plast["homeoEveryTicks"]);
+            // Регионы-ПРЕ вне гомеостаза (кора stage-C); может отсутствовать.
+            if (plast.TryGetValue("homeoExcludePre", out var exclObj))
+                foreach (var r in Json.Arr(exclObj))
+                    _homeoExcludePre.Add((int)Json.Num(r));
 
             // Регионы (start/end экспортированы из Grown.region_of — тот же
             // порядок, что у Brain::region_bounds).
@@ -132,6 +137,10 @@ namespace Dioma.Spikes
             var edgesJson = Json.Arr(root["edges"]);
             var per = new List<KeyValuePair<int, float>>[N];
             for (int i = 0; i < N; i++) per[i] = new List<KeyValuePair<int, float>>();
+            _regionOf = new int[N];
+            for (int r = 0; r < nRegions; r++)
+                for (int i = Regions[r].Start; i < Regions[r].End; i++)
+                    _regionOf[i] = r;
             foreach (var e in edgesJson)
             {
                 var t = Json.Arr(e);
@@ -173,7 +182,7 @@ namespace Dioma.Spikes
 
             _targetInSum = new float[N];
             for (int idx = 0; idx < nSyn; idx++)
-                if (!_inhSyn[idx])
+                if (!_inhSyn[idx] && !_homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
                     _targetInSum[_postOf[idx]] += _values[idx];
 
             // ── alpha-LIF (Shiu et al. 2024): параметры из alpha_lif_population ──
@@ -212,17 +221,40 @@ namespace Dioma.Spikes
 
         public static DiomaBrain FromJson(string text) => new DiomaBrain(Json.Parse(text) as Dictionary<string, object>);
 
-        public int RegionOf(int neuron)
+        public int RegionOf(int neuron) => _regionOf[neuron];
+
+        /// Индекс региона по тегу (SL/SR/WL/WR/I/ML/MR/VL/VR/…), −1 если нет.
+        public int FindRegion(string tag)
         {
-            for (int r = 0; r < Regions.Length; r++)
-                if (neuron >= Regions[r].Start && neuron < Regions[r].End)
-                    return r;
-            throw new ArgumentException($"нейрон {neuron} вне регионов");
+            for (int i = 0; i < Regions.Length; i++)
+                if (Regions[i].Tag == tag)
+                    return i;
+            return -1;
         }
 
         public int SynapseCount => _values.Length;
 
         public long StepCount => _stepCount;
+
+        // ── Сон (ночная фаза: закрыть окно обучения, заякорить выученное) ──
+
+        /// Обнулить eligibility: след ненаграждённой пробы не должен дожить
+        /// до следующей награды и обобщиться на неё.
+        public void ClearEligibility() => Array.Clear(_elig, 0, _elig.Length);
+
+        /// Цель гомеостаза подтягивается к текущим суммам входов: выученное
+        /// за день становится новой «нормой» и больше не вымывается
+        /// нормализацией (`target += alpha·(sum − target)`).
+        public void SleepConsolidate(float alpha)
+        {
+            Array.Clear(_normSums, 0, N);
+            for (int idx = 0; idx < _values.Length; idx++)
+                if (!_inhSyn[idx] && !_homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
+                    _normSums[_postOf[idx]] += _values[idx];
+            for (int i = 0; i < N; i++)
+                if (_normSums[i] > 1e-6f)
+                    _targetInSum[i] += alpha * (_normSums[i] - _targetInSum[i]);
+        }
 
         // ── Тик мира: StepsPerTick подшагов + моторные суммы (step_batch_motor) ──
 
@@ -274,7 +306,10 @@ namespace Dioma.Spikes
             {
                 float sign = _nt[pre] < 0.0f ? -1.0f : 1.0f;
                 for (int k = _rowPtr[pre]; k < _rowPtr[pre + 1]; k++)
-                    _ring[baseIdx + _colIdx[k]] += _values[k] * sign;
+                    // Rust: vals[k].mul_add(sign, slot[post]) — скалярный
+                    // mul_add fused ВСЕГДА; здесь MathF.FusedMultiplyAdd.
+                    _ring[baseIdx + _colIdx[k]] =
+                        FastMath.FusedMulAdd(_values[k], sign, _ring[baseIdx + _colIdx[k]]);
             }
             _ringPos = (readPos + 1) % _ringSize;
 
@@ -295,8 +330,10 @@ namespace Dioma.Spikes
             for (int i = 0; i < N; i++)
             {
                 float add = _spikes[i] > 0 ? 1.0f : 0.0f;
-                _tracePre[i] = _tracePre[i] * _dPre + add;
-                _tracePost[i] = _tracePost[i] * _dPost + add;
+                // Rust: tp.mul_add(d, add) — скалярный fused; зеркало следов
+                // обязано совпадать бит-в-бит (ulp расползается хаосом в коре).
+                _tracePre[i] = FastMath.FusedMulAdd(_tracePre[i], _dPre, add);
+                _tracePost[i] = FastMath.FusedMulAdd(_tracePost[i], _dPost, add);
                 _tracePreHist[_tickRow * N + i] = _tracePre[i];
                 _tracePostHist[_tickRow * N + i] = _tracePost[i];
                 if (_spikes[i] > 0)
@@ -415,12 +452,12 @@ namespace Dioma.Spikes
         {
             Array.Clear(_normSums, 0, N);
             for (int idx = 0; idx < _values.Length; idx++)
-                if (!_inhSyn[idx])
+                if (!_inhSyn[idx] && !_homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
                     _normSums[_postOf[idx]] += _values[idx];
 
             for (int idx = 0; idx < _values.Length; idx++)
             {
-                if (_inhSyn[idx])
+                if (_inhSyn[idx] || _homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
                     continue;
                 int post = _postOf[idx];
                 float target = _targetInSum[post];
@@ -449,51 +486,10 @@ namespace Dioma.Spikes
             return s;
         }
 
-        // ── Численные кернелы (порты pillars, не-fused пути) ──
+        // ── Численные кернелы живут в FastMath (порты pillars) ──
 
-        /// fast_exp: range reduction + минимакс-полином, масштаб через биты
-        /// экспоненты. Портируется скалярный НЕ-fused путь (сборка эталона
-        /// без target_feature=fma) — Horner с двумя округлениями на шаг.
-        static float FastExp(float x)
-        {
-            const float Log2E = 1.4426950408889634f; // f32::LOG2_E
-            float t = x * Log2E;
-            int n = (int)MathF.Floor(t);
-            float f = t - n;
+        static float FastExp(float x) => FastMath.FastExp(x);
 
-            const float C1 = 0.6931471805599453f; // f32::LN_2
-            const float C2 = 0.2402265f;
-            const float C3 = 0.05550411f;
-            const float C4 = 0.009618129f;
-            const float C5 = 0.001333356f;
-            const float C6 = 0.0001540353f;
-
-            float poly = (C6 * f + C5) * f + C4;
-            poly = (poly * f + C3) * f + C2;
-            poly = (poly * f + C1) * f + 1.0f;
-
-            if (n < -126) return 0.0f;
-            if (n > 127) return float.PositiveInfinity;
-            uint biased = (uint)(n + 127);
-            return Int32BitsToSingle((int)(biased << 23)) * poly;
-        }
-
-        /// f32::powi — возведение в степень возведением в квадрат от младших
-        /// битов (порядок LLVM expandPowi), критично для d_e^S.
-        static float Powi(float b, int e)
-        {
-            float result = 1f, cur = b;
-            while (e != 0)
-            {
-                if ((e & 1) != 0)
-                    result *= cur;
-                cur *= cur;
-                e >>= 1;
-            }
-            return result;
-        }
-
-        static float Int32BitsToSingle(int bits) =>
-            BitConverter.Int32BitsToSingle(bits);
+        static float Powi(float b, int e) => FastMath.Powi(b, e);
     }
 }

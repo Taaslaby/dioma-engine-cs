@@ -13,12 +13,12 @@ namespace Dioma.Spikes
     public static class SmokeRunner
     {
         /// <summary>
-        /// Прогнать золотой след из dataDir (dioma_connectome.json +
-        /// dioma_golden.json). Возвращает 0 (PASS) или 1 (FAIL).
+        /// Прогнать золотой след из dataDir (`&lt;prefix&gt;_connectome.json` +
+        /// `&lt;prefix&gt;_golden.json`). Возвращает 0 (PASS) или 1 (FAIL).
         /// </summary>
-        public static int Run(string dataDir)
+        public static int Run(string dataDir, string prefix = "dioma")
         {
-            var runner = GoldenRunner.Load(dataDir);
+            var runner = GoldenRunner.Load(dataDir, prefix);
             int exact = 0, total = runner.Rows.Count;
             int maxDml = 0, maxDmr = 0, firstMismatch = -1;
             double maxWsumRel = 0;
@@ -42,11 +42,15 @@ namespace Dioma.Spikes
                         $"wsum={row.Wsum:F2} (ref {row.WsumRef:F2})");
             }
 
-            Console.WriteLine($"[smoke] паритет моторных сумм: {exact}/{total} тиков точных, " +
+            Console.WriteLine($"[smoke:{prefix}] {runner.Brain.SynapseCount} синапсов: " +
+                              $"паритет {exact}/{total} тиков точных, " +
                               $"max|dML|={maxDml}, max|dMR|={maxDmr}, " +
                               $"max rel wsum={maxWsumRel:E2}, first mismatch={firstMismatch}");
-            bool pass = exact * 10 >= total * 9 && maxDml <= 8 && maxDmr <= 8 && maxWsumRel <= 2e-3;
-            Console.WriteLine($"[smoke] ИТОГ: {(pass ? "PASS" : "FAIL")}");
+            // Мозг обязан совпадать ТОЧНО: ulp в рекуррентной коре разрастается
+            // в другое поведение, поэтому допуска по спайкам нет (только по
+            // контрольной сумме весов — там ulp powi в d_e^S).
+            bool pass = exact == total && maxWsumRel <= 2e-3;
+            Console.WriteLine($"[smoke:{prefix}] ИТОГ: {(pass ? "PASS" : "FAIL")}");
             return pass ? 0 : 1;
         }
     }

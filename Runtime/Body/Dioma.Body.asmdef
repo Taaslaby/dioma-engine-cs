@@ -1,0 +1,17 @@
+{
+    "name": "Dioma.Body",
+    "rootNamespace": "Dioma.Body",
+    "references": [
+        "Dioma.Spikes",
+        "Dioma.Bio"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

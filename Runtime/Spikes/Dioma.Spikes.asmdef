@@ -1,5 +1,5 @@
 {
-    "name": "Dioma.Spikes.Runtime",
+    "name": "Dioma.Spikes",
     "rootNamespace": "Dioma.Spikes",
     "references": [],
     "includePlatforms": [],

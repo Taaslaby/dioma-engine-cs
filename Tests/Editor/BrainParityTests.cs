@@ -9,18 +9,7 @@ using Dioma.Spikes;
 
 public class BrainParityTests
 {
-    // Пакет может быть embedded или подключён по file: — путь берём у Unity.
-    static string DataDir
-    {
-        get
-        {
-            var info = UnityEditor.PackageManager.PackageInfo.FindForPackageName("com.dioma.spikes");
-            string root = info != null && !string.IsNullOrEmpty(info.resolvedPath)
-                ? info.resolvedPath
-                : Path.GetFullPath("Packages/com.dioma.spikes");
-            return Path.Combine(root, "Tests", "Editor", "Data");
-        }
-    }
+    static string DataDir => TestPaths.DataDir;
 
     GoldenRunner _runner;
 
@@ -85,11 +74,42 @@ public class BrainParityTests
         Debug.Log($"[parity] точных тиков {exact}/{total}, max|dML|={maxDml}, " +
                   $"max|dMR|={maxDmr}, max rel wsum={maxWsumRel:E2}, first mismatch={firstMismatch}");
 
-        Assert.GreaterOrEqual(exact, total * 9 / 10,
-            $"слишком много расхождений моторных сумм (первое в тике {firstMismatch})");
-        Assert.LessOrEqual(maxDml, 8, "моторная сумма ML разошлась с эталоном");
-        Assert.LessOrEqual(maxDmr, 8, "моторная сумма MR разошлась с эталоном");
+        Assert.AreEqual(total, exact,
+            $"моторные суммы должны совпадать ТОЧНО (первое расхождение в тике {firstMismatch})");
         Assert.LessOrEqual(maxWsumRel, 2e-3, "сумма весов разошлась с эталоном");
+    }
+
+    [Test]
+    public void Parity_GoldenTrace_StageC()
+    {
+        // Стресс-тест: 760 нейронов, рекуррентная кора, ~39k синапсов.
+        var runner = GoldenRunner.Load(DataDir, "dioma_c");
+        int exact = 0, total = runner.Rows.Count;
+        int maxDml = 0, maxDmr = 0;
+        double maxWsumRel = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        foreach (var row in runner.Rows)
+        {
+            runner.Step();
+            int dml = Math.Abs(row.Ml - row.MlRef);
+            int dmr = Math.Abs(row.Mr - row.MrRef);
+            if (dml == 0 && dmr == 0) exact++;
+            maxDml = Math.Max(maxDml, dml);
+            maxDmr = Math.Max(maxDmr, dmr);
+            double rel = Math.Abs(row.Wsum - row.WsumRef) / Math.Max(1.0, Math.Abs(row.WsumRef));
+            maxWsumRel = Math.Max(maxWsumRel, rel);
+        }
+        sw.Stop();
+
+        double msPerTick = sw.Elapsed.TotalMilliseconds / total;
+        int nSyn = runner.Brain.SynapseCount;
+        Debug.Log($"[parity-c] {nSyn} синапсов: точных {exact}/{total}, " +
+                  $"max|dML|={maxDml}, max|dMR|={maxDmr}, max rel wsum={maxWsumRel:E2}, " +
+                  $"{msPerTick:F2} мс/тик");
+
+        Assert.AreEqual(total, exact, "stage-C: моторные суммы должны совпадать ТОЧНО");
+        Assert.LessOrEqual(maxWsumRel, 2e-3, "stage-C: сумма весов разошлась");
     }
 
     [Test]

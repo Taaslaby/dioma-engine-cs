@@ -1,6 +1,7 @@
 // Воспроизведение «золотого следа» на C#-ядре: упрощённый контракт
 // существа (этап 1), зеркало цикла из export_connectome.rs.
 
+using Dioma.Data;
 using System;
 using System.Collections.Generic;
 using System.IO;

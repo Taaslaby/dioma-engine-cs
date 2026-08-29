@@ -12,6 +12,7 @@
 //     моменте спайков поста, LTD — наоборот, eligibility *= d_e^S;
 //   - дофамин Δw = lr·D·e с клэмпом [w_min, w_max], гомеостаз normalize.
 
+using Dioma.Data;
 using System;
 using System.Collections.Generic;
 

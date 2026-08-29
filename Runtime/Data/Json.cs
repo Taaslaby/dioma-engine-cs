@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
-namespace Dioma.Spikes
+namespace Dioma.Data
 {
     public static class Json
     {

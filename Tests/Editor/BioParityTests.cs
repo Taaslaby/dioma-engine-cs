@@ -7,6 +7,7 @@ using System.IO;
 using NUnit.Framework;
 using UnityEngine;
 using Dioma.Bio;
+using Dioma.Data;
 using Dioma.Spikes;
 
 public class BioParityTests

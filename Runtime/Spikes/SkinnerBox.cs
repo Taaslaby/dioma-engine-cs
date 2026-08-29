@@ -5,6 +5,7 @@
 // Порт `dioma/src/bin/export_learning.rs`; сценарий и эталонные веса лежат
 // в `dioma_skinner_golden.json`.
 
+using Dioma.Data;
 using System;
 using System.Collections.Generic;
 using System.IO;

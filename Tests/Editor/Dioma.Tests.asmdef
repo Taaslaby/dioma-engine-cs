@@ -5,7 +5,8 @@
         "Dioma.Spikes",
         "Dioma.Bio",
         "Dioma.Body",
-        "Dioma.World"
+        "Dioma.World",
+        "Dioma.Data"
     ],
     "includePlatforms": [
         "Editor"

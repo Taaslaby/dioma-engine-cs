@@ -76,9 +76,12 @@ namespace Dioma.Body
         {
             Brain = brain;
             Genome = genome ?? Genome.Newborn();
-            Blood = blood ?? Bio.Blood.Creature();
-            Genome.Metabolism.ApplyTo(Blood);
-            Blood.Conc[Chem.Hunger] = NewbornHunger;
+            Genome.Metabolism.ApplyTo(Blood = blood ?? Bio.Blood.Creature());
+            // Голод новорождённого ставим ТОЛЬКО когда тело создаём сами:
+            // переданная кровь — это либо загруженное сохранение, либо
+            // подготовленное состояние, и перетирать его нельзя.
+            if (blood == null)
+                Blood.Conc[Chem.Hunger] = NewbornHunger;
             _ext = new float[brain.N];
             _rSl = brain.FindRegion("SL");
             _rSr = brain.FindRegion("SR");

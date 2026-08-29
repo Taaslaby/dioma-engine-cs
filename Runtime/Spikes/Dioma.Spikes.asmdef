@@ -1,7 +1,9 @@
 {
     "name": "Dioma.Spikes",
     "rootNamespace": "Dioma.Spikes",
-    "references": [],
+    "references": [
+        "Dioma.Data"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

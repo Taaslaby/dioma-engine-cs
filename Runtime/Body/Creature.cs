@@ -1,11 +1,17 @@
 // Существо: единственное место, где встречаются спайки и биохимия.
-// Порт `dioma_engine::creature` (упрощённый: без гиппокампа/зеркала/генома).
+// Порт `dioma_engine::creature` (упрощённый: без гиппокампа и зеркала).
 //
 // Тик: сенсоры × чувствительность крови → внешний ток мозга → моторные суммы
 // → тело (утомление, глюкоза, боль, дофамин) → действие. Мозг определяет
 // ТОЛЬКО поворот; тягу и решение «есть» даёт кровь.
+//
+// Жизненный цикл: рождение (наследство весов + прожигание врождённых
+// рефлексов + снимок Болдуина) → день (обучение дофамином) → ночь
+// (консолидация) → размножение (`SpawnGenome`: нажитое становится
+// врождённым у потомка).
 
 using System;
+using System.Collections.Generic;
 using Dioma.Bio;
 using Dioma.Spikes;
 
@@ -36,6 +42,8 @@ namespace Dioma.Body
 
         public readonly DiomaBrain Brain;
         public readonly Blood Blood;
+        /// Геном: наследуемые веса, метаболизм, врождённые рефлексы.
+        public readonly Genome Genome;
 
         readonly float[] _ext;
         readonly int _rSl, _rSr, _rWl, _rWr, _rVl, _rVr, _rMl, _rMr;
@@ -48,12 +56,28 @@ namespace Dioma.Body
         public long LastSpikes { get; private set; }
         public int AwakeTicks { get; private set; }
         public int SleepLeft { get; private set; }
+        public int Nights { get; private set; }
         public bool Asleep => SleepLeft > 0;
 
-        public Creature(DiomaBrain brain, Blood blood = null)
+        /// Прожиганий рефлекса при рождении: одного прохода мало — дуга
+        /// набирает вес постепенно, три дают устойчивый рефлекс.
+        public const int BirthBurnPasses = 3;
+        /// Потолок весов при прожигании: выше рабочего, иначе первый же
+        /// дофамин срежет врождённые хвосты и ослабит рефлекс.
+        public const float BurnWCap = 64f;
+        /// Ночная консолидация: что считать «сильным выученным», насколько
+        /// усилить его и насколько обрезать шум.
+        public const float SleepAnchorAlpha = 0.5f;
+        public const float SleepStrongMin = 0.5f;
+        public const float SleepReinforce = 0.15f;
+        public const float SleepPrune = 0.7f;
+
+        public Creature(DiomaBrain brain, Genome genome = null, Blood blood = null)
         {
             Brain = brain;
+            Genome = genome ?? Genome.Newborn();
             Blood = blood ?? Bio.Blood.Creature();
+            Genome.Metabolism.ApplyTo(Blood);
             Blood.Conc[Chem.Hunger] = NewbornHunger;
             _ext = new float[brain.N];
             _rSl = brain.FindRegion("SL");
@@ -66,6 +90,21 @@ namespace Dioma.Body
             _rMr = brain.FindRegion("MR");
             if (_rSl < 0 || _rSr < 0 || _rMl < 0 || _rMr < 0)
                 throw new InvalidOperationException("коннектому нужны регионы SL, SR, ML, MR");
+
+            // Наследство: выученные родителем веса поверх выращенной топологии.
+            if (Genome.Weights != null && Genome.Weights.Length == brain.SynapseCount)
+                brain.SetCsrValues(Genome.Weights);
+
+            // Эталон Болдуина: снимок «того, с чем родился». От него считается
+            // всё нажитое за жизнь — и снимок НЕ обновляется ночным сном,
+            // иначе прирост обнулялся бы каждую ночь.
+            brain.MemorySnapshot();
+
+            // Врождённые рефлексы прожигаются при рождении; каждое прожигание
+            // обновляет снимок, так что рефлекс не считается «нажитым».
+            foreach (var instinct in Genome.Instincts)
+                for (int pass = 0; pass < BirthBurnPasses; pass++)
+                    instinct.BurnInto(brain, BasalExt, BurnWCap);
         }
 
         void Inject(int region, float current)
@@ -169,11 +208,70 @@ namespace Dioma.Body
         {
             SleepLeft = SleepTicks;
             AwakeTicks = 0;
-            // Ночь: окно обучения закрывается, гомеостаз якорится на выученном,
-            // тело восстанавливается.
+            Nights++;
+            // Ночь: окно обучения закрывается (след ненаграждённой пробы не
+            // должен дожить до утра), гомеостаз якорится на выученном, сильные
+            // пути дня закрепляются и слегка усиливаются, шум обрезается,
+            // тело восстанавливается. Снимок Болдуина НЕ трогается — прирост
+            // за жизнь копится до размножения.
             Brain.ClearEligibility();
-            Brain.SleepConsolidate(0.5f);
+            Brain.SleepConsolidate(SleepAnchorAlpha);
+            Brain.ConsolidateSleep(SleepStrongMin, SleepReinforce, SleepPrune);
             Blood.Sleep();
+        }
+
+        // ── Наследственность ──
+
+        /// Рефлексы, нажитые за жизнь: дуги из `Genome.ReflexPairs`, где
+        /// прирост веса относительно снимка рождения выше порога. Это эффект
+        /// Болдуина — навык, выученный этим существом, станет врождённым у
+        /// потомка (без изменения топологии).
+        public List<Instinct> LearnedInstincts()
+        {
+            var scored = new List<(float Gain, int Pre, int Post)>();
+            foreach (var (preTag, postTag) in Genome.ReflexPairs)
+            {
+                int pre = Brain.FindRegion(preTag), post = Brain.FindRegion(postTag);
+                if (pre < 0 || post < 0)
+                    continue;
+                float gain = Brain.LearnedGain(pre, post);
+                if (gain >= Genome.LearnedMinGain)
+                    scored.Add((gain, pre, post));
+            }
+            scored.Sort((a, b) => b.Gain.CompareTo(a.Gain));
+
+            var result = new List<Instinct>();
+            for (int i = 0; i < scored.Count && i < Genome.LearnedTopN; i++)
+            {
+                var (gain, pre, post) = scored[i];
+                var inputs = new List<(int, float)>();
+                var rPre = Brain.Regions[pre];
+                var rPost = Brain.Regions[post];
+                for (int n = rPre.Start; n < rPre.End; n++)
+                    inputs.Add((n, Genome.LearnedPreDrive));
+                for (int n = rPost.Start; n < rPost.End; n++)
+                    inputs.Add((n, Genome.LearnedPostDrive));
+                float dopamine = Math.Clamp(gain / Genome.LearnedDopamineScale,
+                                            Instinct.DopamineMin, Instinct.DopamineMax);
+                result.Add(new Instinct(inputs, dopamine));
+            }
+            return result;
+        }
+
+        /// Геном потомка. Наследуется НЕ выученное напрямую (это был бы
+        /// ламаркизм), а проводка, с которой родитель РОДИЛСЯ, — с дрейфом
+        /// весов и мутацией метаболизма. Нажитое за жизнь передаётся иначе:
+        /// сильные пути сворачиваются в гены инстинктов, и ребёнок отстраивает
+        /// рефлекс сам при рождении (эффект Болдуина). Топология при этом не
+        /// меняется — девелопментальный рост не нужен.
+        public Genome SpawnGenome(ulong childSeed)
+        {
+            var rng = new XorShift(childSeed ^ 0x9E3779B97F4A7C15UL);
+            var parent = Genome.Clone();
+            parent.Weights = Brain.BirthWeights();
+            var child = parent.Mutate(rng);
+            child.AddLearnedInstincts(LearnedInstincts(), rng);
+            return child;
         }
     }
 }

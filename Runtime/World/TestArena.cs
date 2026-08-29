@@ -8,30 +8,11 @@
 
 using System;
 using System.Collections.Generic;
+using Dioma.Spikes;
 using Dioma.Body;
 
 namespace Dioma.World
 {
-    /// Детерминированный ГСЧ (порт dioma_engine::rng::XorShift).
-    public sealed class XorShift
-    {
-        ulong _s;
-        public XorShift(ulong seed) => _s = seed == 0 ? 0x9E3779B97F4A7C15ul : seed;
-
-        public ulong NextU64()
-        {
-            _s ^= _s << 13;
-            _s ^= _s >> 7;
-            _s ^= _s << 17;
-            return _s;
-        }
-
-        /// [0, 1)
-        public float NextFloat() => (NextU64() >> 40) / 16777216f;
-
-        public float Range(float lo, float hi) => lo + (hi - lo) * NextFloat();
-    }
-
     public sealed class TestArena
     {
         // ── Константы мира (эталон: sim/mod.rs) ──

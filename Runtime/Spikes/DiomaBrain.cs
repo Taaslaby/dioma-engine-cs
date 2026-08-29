@@ -64,6 +64,8 @@ namespace Dioma.Spikes
         bool _tickActive;
         long _stepCount;
         readonly float[] _normSums;
+        /// Долговременный снимок весов (эталон Болдуина); null до MemorySnapshot.
+        float[] _memoryLt;
         readonly List<KeyValuePair<int, float>> _pending = new List<KeyValuePair<int, float>>();
 
         // Константы распада (считаются один раз — значения детерминированы).
@@ -236,11 +238,22 @@ namespace Dioma.Spikes
 
         public long StepCount => _stepCount;
 
-        // ── Сон (ночная фаза: закрыть окно обучения, заякорить выученное) ──
+        // ── Сон и долговременная память (эталон Болдуина) ──
 
         /// Обнулить eligibility: след ненаграждённой пробы не должен дожить
         /// до следующей награды и обобщиться на неё.
         public void ClearEligibility() => Array.Clear(_elig, 0, _elig.Length);
+
+        /// Оставить eligibility только на синапсах, у которых И пре, И пост
+        /// отмечены в маске. Нужно прожиганию рефлекса: ко-активация сенсора
+        /// и мотора возбуждает и тормозные пути, и без фильтра награда
+        /// усилила бы их — рефлекс глушил бы собственный драйв.
+        public void RestrictEligibility(bool[] keepNeurons)
+        {
+            for (int idx = 0; idx < _elig.Length; idx++)
+                if (!keepNeurons[_preOf[idx]] || !keepNeurons[_postOf[idx]])
+                    _elig[idx] = 0f;
+        }
 
         /// Цель гомеостаза подтягивается к текущим суммам входов: выученное
         /// за день становится новой «нормой» и больше не вымывается
@@ -254,6 +267,88 @@ namespace Dioma.Spikes
             for (int i = 0; i < N; i++)
                 if (_normSums[i] > 1e-6f)
                     _targetInSum[i] += alpha * (_normSums[i] - _targetInSum[i]);
+        }
+
+        /// Снять долговременный снимок весов — эталон Болдуина. От него
+        /// считается `LearnedGain`: «что существо нажило за жизнь». Снимок
+        /// НЕ обновляется ночным сном (иначе прирост обнулялся бы каждую
+        /// ночь и наследовать было бы нечего) — только при рождении и
+        /// прожигании инстинктов.
+        public void MemorySnapshot() => _memoryLt = (float[])_values.Clone();
+
+        /// Восстановление к снимку: дрейф дня стирается, выученный рисунок
+        /// возвращается (`w += alpha·(lt − w)`).
+        public void MemoryRecall(float alpha)
+        {
+            if (_memoryLt == null)
+                return;
+            int n = Math.Min(_memoryLt.Length, _values.Length);
+            for (int i = 0; i < n; i++)
+                _values[i] += alpha * (_memoryLt[i] - _values[i]);
+        }
+
+        /// Ночная консолидация: сильные выученные дельты (относительно снимка)
+        /// закрепляются и слегка усиливаются, слабые — шум и дрейф гомеостаза —
+        /// обрезаются к снимку. Так навык переживает ночь, а случайные
+        /// колебания нет.
+        public void ConsolidateSleep(float strongMin, float reinforce, float prune)
+        {
+            if (_memoryLt == null)
+                return;
+            int n = Math.Min(_memoryLt.Length, _values.Length);
+            for (int i = 0; i < n; i++)
+            {
+                float d = _values[i] - _memoryLt[i];
+                _values[i] = MathF.Abs(d) >= strongMin
+                    ? _memoryLt[i] + d * (1f + reinforce)
+                    : _memoryLt[i] + d * (1f - prune);
+            }
+        }
+
+        /// Сколько веса нажито за жизнь на дуге pre→post: сумма
+        /// `w − snapshot` по её синапсам. Основа эффекта Болдуина —
+        /// сильно выученные пути сворачиваются в инстинкты потомка.
+        public float LearnedGain(int preRegion, int postRegion)
+        {
+            if (_memoryLt == null)
+                return 0f;
+            int n = Math.Min(_memoryLt.Length, _values.Length);
+            float gain = 0f;
+            for (int idx = 0; idx < n; idx++)
+                if (_regionOf[_preOf[idx]] == preRegion && _regionOf[_postOf[idx]] == postRegion)
+                    gain += _values[idx] - _memoryLt[idx];
+            return gain;
+        }
+
+        /// Веса, с которыми существо родилось (снимок Болдуина). Именно они
+        /// наследуются: передавать выученное напрямую было бы ламаркизмом,
+        /// а нажитое за жизнь идёт потомку через гены инстинктов.
+        public float[] BirthWeights() => (float[])(_memoryLt ?? _values).Clone();
+
+        /// Среднеквадратичный дрейф весов от снимка (диагностика).
+        public float MemoryDriftRms()
+        {
+            if (_memoryLt == null)
+                return 0f;
+            int n = Math.Min(_memoryLt.Length, _values.Length);
+            if (n == 0)
+                return 0f;
+            double s = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double d = _values[i] - _memoryLt[i];
+                s += d * d;
+            }
+            return (float)Math.Sqrt(s / n);
+        }
+
+        /// Заменить веса CSR (наследование выученного, загрузка сохранения).
+        public void SetCsrValues(float[] vals)
+        {
+            if (vals.Length != _values.Length)
+                throw new ArgumentException(
+                    $"весов {vals.Length}, а синапсов {_values.Length}");
+            Array.Copy(vals, _values, _values.Length);
         }
 
         // ── Тик мира: StepsPerTick подшагов + моторные суммы (step_batch_motor) ──
@@ -414,7 +509,7 @@ namespace Dioma.Spikes
             _pending.AddRange(keep);
             if (dueSum != 0f)
             {
-                ApplyDopamine(dueSum);
+                ApplyDopamine(dueSum, _wMax);
                 Normalize();
             }
         }
@@ -427,14 +522,26 @@ namespace Dioma.Spikes
 
         public void RewardNow(float dopamine)
         {
-            ApplyDopamine(dopamine);
+            ApplyDopamine(dopamine, _wMax);
             Normalize();
         }
 
-        /// Δw = lr·D·e, клэмп [w_min, w_max]; синапсы с Δw = 0 не трогаются.
-        void ApplyDopamine(float dopamine)
+        /// Награда с явным потолком весов. Рождение прожигает рефлексы ВЫШЕ
+        /// рабочего `w_max`: у выращенного коннектома хвосты весов — десятки
+        /// единиц, и обычный дофамин срезал бы их при первом же награждении,
+        /// ОСЛАБИВ рефлекс вместо усиления.
+        public void RewardNowCapped(float dopamine, float wCap)
         {
-            float wCap = _wMax;
+            ApplyDopamine(dopamine, wCap);
+            Normalize();
+        }
+
+        public float WMax => _wMax;
+
+        /// Δw = lr·D·e, клэмп [w_min, wCap]; синапсы с Δw = 0 не трогаются
+        /// (врождённые хвосты выше потолка сохраняются бит-в-бит).
+        void ApplyDopamine(float dopamine, float wCap)
+        {
             float lrDopa = _lr * dopamine;
             for (int i = 0; i < _values.Length; i++)
             {

@@ -49,11 +49,5 @@ namespace Dioma.Spikes
             Console.WriteLine($"[smoke] ИТОГ: {(pass ? "PASS" : "FAIL")}");
             return pass ? 0 : 1;
         }
-
-        /// Каталог данных по умолчанию — данные тестов пакета.
-        public static string DefaultDataDir =>
-            Path.GetFullPath(Path.Combine(
-                Directory.GetCurrentDirectory(),
-                "Packages/com.dioma.spikes/Tests/Editor/Data"));
     }
 }

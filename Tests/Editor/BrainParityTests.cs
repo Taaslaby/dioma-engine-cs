@@ -9,7 +9,18 @@ using Dioma.Spikes;
 
 public class BrainParityTests
 {
-    static string DataDir => Path.Combine(Application.dataPath, "..", "Packages", "com.dioma.spikes", "Tests", "Editor", "Data");
+    // Пакет может быть embedded или подключён по file: — путь берём у Unity.
+    static string DataDir
+    {
+        get
+        {
+            var info = UnityEditor.PackageManager.PackageInfo.FindForPackageName("com.dioma.spikes");
+            string root = info != null && !string.IsNullOrEmpty(info.resolvedPath)
+                ? info.resolvedPath
+                : Path.GetFullPath("Packages/com.dioma.spikes");
+            return Path.Combine(root, "Tests", "Editor", "Data");
+        }
+    }
 
     GoldenRunner _runner;
 

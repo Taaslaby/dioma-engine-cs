@@ -10,6 +10,7 @@ using NUnit.Framework;
 using UnityEngine;
 using Dioma.Body;
 using Dioma.Spikes;
+using Dioma.World;
 
 public class KernelTests
 {
@@ -74,6 +75,47 @@ public class KernelTests
         Assert.AreEqual(-1, mismatchTick,
             "Burst и managed обязаны совпадать бит-в-бит — иначе FloatMode не Strict");
         Assert.AreEqual(0.0, maxDiff, "веса разошлись: пластичность видит разные спайки");
+    }
+
+    [Test]
+    public void BurstMatchesManagedInArena()
+    {
+        // Паритет на ВАРЬИРУЮЩЕЙСЯ сенсорике: в арене вход меняется каждый
+        // тик, включаются награды за еду, боль от стен, сон. Константный
+        // стимул такого не покрывает — а именно здесь ulp превратился бы в
+        // другую траекторию.
+        if (!SpikeKernels.IsAvailable(KernelMode.Burst))
+        {
+            Assert.Ignore("модуль Dioma.Spikes.Burst не установлен");
+            return;
+        }
+
+        using var ba = LoadBrain(KernelMode.Managed);
+        using var bb = LoadBrain(KernelMode.Burst);
+        var arenaA = new TestArena(new Creature(ba));
+        var arenaB = new TestArena(new Creature(bb));
+
+        int firstMismatch = -1;
+        for (int t = 0; t < 600; t++)
+        {
+            var x = arenaA.Step();
+            var y = arenaB.Step();
+            if (firstMismatch < 0 &&
+                (arenaA.Creature.LastMl != arenaB.Creature.LastMl ||
+                 arenaA.Creature.LastMr != arenaB.Creature.LastMr ||
+                 x.Steer != y.Steer || x.Drive != y.Drive ||
+                 arenaA.X != arenaB.X || arenaA.Y != arenaB.Y))
+                firstMismatch = t;
+        }
+
+        Debug.Log($"[kernel-arena] 600 тиков: первое расхождение {firstMismatch}; " +
+                  $"съедено {arenaA.Creature.FoodEaten}/{arenaB.Creature.FoodEaten}, " +
+                  $"ударов {arenaA.Creature.WallHits}/{arenaB.Creature.WallHits}, " +
+                  $"позиция ({arenaA.X:F2},{arenaA.Y:F2}) / ({arenaB.X:F2},{arenaB.Y:F2})");
+
+        Assert.AreEqual(-1, firstMismatch,
+            "в арене траектории обязаны совпасть — иначе кернелы расходятся на живом входе");
+        Assert.AreEqual(arenaA.Creature.FoodEaten, arenaB.Creature.FoodEaten);
     }
 
     [Test]

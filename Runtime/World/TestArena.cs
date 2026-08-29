@@ -129,12 +129,17 @@ namespace Dioma.World
 
             // Стены: лучевые пробы. Обе диагонали высоки только когда стена
             // ПРЯМО по курсу; боковая стена попадает в одну пробу.
-            float pLeft = Probe(Heading + MathF.PI / 2f);
-            float pRight = Probe(Heading - MathF.PI / 2f);
+            //
+            // Сторона «L» — это отрицательный угол (то же соглашение, что у
+            // запаха: rel < 0 → SmellL). Гейны анатомии замыкают контур:
+            // SL→ML тянет К еде на этой стороне, WL→MR отворачивает ОТ стены
+            // на ней же. Перепутать знак = ехать в стену и мимо еды.
+            float pSideL = Probe(Heading - MathF.PI / 2f);
+            float pSideR = Probe(Heading + MathF.PI / 2f);
             float pFwdL = Probe(Heading - MathF.PI / 4f);
             float pFwdR = Probe(Heading + MathF.PI / 4f);
-            s.WallL = MathF.Max(pLeft, pFwdL);
-            s.WallR = MathF.Max(pRight, pFwdR);
+            s.WallL = MathF.Max(pSideL, pFwdL);
+            s.WallR = MathF.Max(pSideR, pFwdR);
             return s;
         }
 

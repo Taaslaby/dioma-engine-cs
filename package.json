@@ -1,0 +1,18 @@
+{
+  "name": "com.dioma.spikes",
+  "version": "0.1.0",
+  "displayName": "Dioma Spikes",
+  "description": "Ядро спайковой симуляции dioma: LIF-alpha (Shiu et al. 2024) + mean-field дофаминовая STDP + мягкий гомеостаз. Порт Rust-движка dioma-engine на C#, паритет с Rust-эталоном (золотой след) — тестом.",
+  "unity": "6000.0",
+  "author": {
+    "name": "Atlasov Anton"
+  },
+  "keywords": [
+    "spiking",
+    "neural",
+    "simulation",
+    "STDP",
+    "LIF"
+  ],
+  "dependencies": {}
+}

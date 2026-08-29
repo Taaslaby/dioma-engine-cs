@@ -1,0 +1,12 @@
+# Unity/IDE
+*.user
+.vs/
+.idea/
+obj/
+bin/
+
+# OS
+Thumbs.db
+.DS_Store
+
+*.log

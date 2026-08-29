@@ -1,0 +1,11 @@
+{
+ "n":8, "dt":0.5, "stepsPerTick":100,
+ "lif":{"tauRef":2.2,"tauM":20.0,"vRest":-52.0,"vThresh":-45.0,"vReset":-52.0,"tauSyn":3.0,"tDelay":1.8},
+ "stdp":{"tauPre":20.0,"tauPost":20.0,"tauE":1000.0,"aLtp":0.1,"aLtd":0.005,"lr":0.3,"wMin":0.0,"wMax":6},
+ "plasticity":{"homeoRate":0.25,"rewardDelayTicks":1,"homeoEveryTicks":0,"homeoExcludePre":[]},
+ "seed":42,
+ "regions":[{"tag":"S","start":0,"end":4,"inhibitory":false},{"tag":"M","start":4,"end":8,"inhibitory":false}],
+ "gains":[[0,1],[0,0]],
+ "nt":[1,1,1,1,1,1,1,1],
+ "edges":[[0,4,0.8],[1,5,0.8],[2,6,0.8],[3,7,0.8]]
+}

@@ -470,7 +470,42 @@ namespace Dioma.Spikes
             }
         }
 
-        // ── Диагностика ──
+        // ── Тик без моторных сумм (холостые тики, зазоры протоколов) ──
+
+        /// Прогнать тик, не собирая моторные суммы. Нужно для затухания
+        /// eligibility между пробами: без зазора награда кредитует и пути
+        /// предыдущих проб, и избирательности обучения не возникает.
+        public long Tick(float[] ext)
+        {
+            long total = 0;
+            for (int s = 0; s < StepsPerTick; s++)
+            {
+                Substep(ext);
+                for (int i = 0; i < N; i++) total += _spikes[i];
+            }
+            return total;
+        }
+
+        // ── Диагностика и доступ к весам ──
+
+        /// Копия весов CSR в каноническом порядке (сохранение существа,
+        /// проверка протоколов обучения, наследование).
+        public float[] CsrValues() => (float[])_values.Clone();
+
+        /// Вес одного синапса CSR по индексу (протоколы смотрят конкретные
+        /// пути; порядок совпадает с `edges` коннектома после отбора гейнами).
+        public float WeightAt(int synapse) => _values[synapse];
+
+        /// Суммарный вес рёбер между парой регионов: «насколько сильна дуга
+        /// pre→post». Основная метрика обучения — усилился ли путь.
+        public double RegionPairWeight(int preRegion, int postRegion)
+        {
+            double s = 0;
+            for (int idx = 0; idx < _values.Length; idx++)
+                if (_regionOf[_preOf[idx]] == preRegion && _regionOf[_postOf[idx]] == postRegion)
+                    s += _values[idx];
+            return s;
+        }
 
         public double WeightSum()
         {

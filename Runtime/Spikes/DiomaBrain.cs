@@ -56,14 +56,18 @@ namespace Dioma.Spikes
         readonly SpikeLayout _layout;
         /// Топология и параметры модели — для бенчмарков и своих кернелов.
         public SpikeLayout KernelLayout() => _layout;
+        readonly PlasticityLayout _plastLayout;
+        /// Топология и константы STDP — для бенчмарков и своих кернелов.
+        public PlasticityLayout PlastLayout => _plastLayout;
 
         // ── Тик-пластичность (mean-field STDP) ──
-        readonly float[] _elig;
-        readonly int[] _tickSpikeCount;
-        readonly long[] _tickSpikeSumS;
-        readonly float[] _tracePre, _tracePost, _tracePreHist, _tracePostHist;
+        // ── Пластичность: сменный кернел (см. IPlasticityKernel) ──
+        readonly IPlasticityKernel _plast;
+        readonly float[] _elig;   // буфер чтения eligibility для дофамина
         int _tickRow;
         bool _tickActive;
+        /// Имя активного вычислителя пластичности.
+        public string PlasticityKernelName => _plast.Name;
         long _stepCount;
         readonly float[] _normSums;
         /// Долговременный снимок весов (эталон Болдуина); null до MemorySnapshot.
@@ -209,19 +213,29 @@ namespace Dioma.Spikes
             _kernel = SpikeKernels.Create(kernelMode ?? SpikeKernels.Default, layout, _values);
             _history = new int[StepsPerTick * N];
 
-            // ── пластичность ──
+            // ── Пластичность: mean-field STDP в сменном кернеле ──
+            // CSC-индекс входящих рёбер строится один раз: он нужен, чтобы
+            // читать историю следов пре локально (см. IPlasticityKernel).
+            Spikes.PlasticityLayout.BuildIncoming(N, _postOf, out var inPtr, out var inSyn);
+            var plastLayout = new PlasticityLayout
+            {
+                N = N,
+                StepsPerTick = StepsPerTick,
+                RowPtr = _rowPtr,
+                PreOf = _preOf,
+                PostOf = _postOf,
+                InPtr = inPtr,
+                InSyn = inSyn,
+                DecayPre = FastExp(-Dt / _tauPre),
+                DecayPost = FastExp(-Dt / _tauPost),
+                DecayElig = FastExp(-Dt / _tauE),
+                ALtp = _aLtp,
+                ALtd = _aLtd,
+            };
+            _plastLayout = plastLayout;
+            _plast = SpikeKernels.CreatePlasticity(kernelMode ?? SpikeKernels.Default, plastLayout);
             _elig = new float[nSyn];
-            _tickSpikeCount = new int[N];
-            _tickSpikeSumS = new long[N];
-            _tracePre = new float[N];
-            _tracePost = new float[N];
-            _tracePreHist = new float[N * StepsPerTick];
-            _tracePostHist = new float[N * StepsPerTick];
             _normSums = new float[N];
-
-            _dPre = FastExp(-Dt / _tauPre);
-            _dPost = FastExp(-Dt / _tauPost);
-            _dE = FastExp(-Dt / _tauE);
         }
 
         /// Загрузить мозг из JSON-коннектома. `kernelMode` выбирает вычислитель
@@ -248,18 +262,14 @@ namespace Dioma.Spikes
 
         /// Обнулить eligibility: след ненаграждённой пробы не должен дожить
         /// до следующей награды и обобщиться на неё.
-        public void ClearEligibility() => Array.Clear(_elig, 0, _elig.Length);
+        public void ClearEligibility() => _plast.ClearEligibility();
 
         /// Оставить eligibility только на синапсах, у которых И пре, И пост
         /// отмечены в маске. Нужно прожиганию рефлекса: ко-активация сенсора
         /// и мотора возбуждает и тормозные пути, и без фильтра награда
         /// усилила бы их — рефлекс глушил бы собственный драйв.
-        public void RestrictEligibility(bool[] keepNeurons)
-        {
-            for (int idx = 0; idx < _elig.Length; idx++)
-                if (!keepNeurons[_preOf[idx]] || !keepNeurons[_postOf[idx]])
-                    _elig[idx] = 0f;
-        }
+        public void RestrictEligibility(bool[] keepNeurons) =>
+            _plast.RestrictEligibility(keepNeurons);
 
         /// Цель гомеостаза подтягивается к текущим суммам входов: выученное
         /// за день становится новой «нормой» и больше не вымывается
@@ -393,71 +403,16 @@ namespace Dioma.Spikes
             PostSubstepTick();
         }
 
-        // ── Тик-пластичность (mean-field STDP, один проход за тик) ──
+        // ── Тик-пластичность живёт в кернеле (mean-field STDP) ──
 
         void TickNoteSpikes(int at)
         {
-            for (int i = 0; i < N; i++)
-            {
-                float add = _history[at + i] > 0 ? 1.0f : 0.0f;
-                // Rust: tp.mul_add(d, add) — скалярный fused; зеркало следов
-                // обязано совпадать бит-в-бит (ulp расползается хаосом в коре).
-                _tracePre[i] = FastMath.FusedMulAdd(_tracePre[i], _dPre, add);
-                _tracePost[i] = FastMath.FusedMulAdd(_tracePost[i], _dPost, add);
-                _tracePreHist[_tickRow * N + i] = _tracePre[i];
-                _tracePostHist[_tickRow * N + i] = _tracePost[i];
-                if (_history[at + i] > 0)
-                {
-                    _tickSpikeCount[i]++;
-                    _tickSpikeSumS[i] += _tickRow;
-                }
-            }
+            _plast.NoteSpikes(_history, at, _tickRow);
             _tickRow = (_tickRow + 1) % StepsPerTick;
             _tickActive = true;
         }
 
-        void TickPlasticityApply()
-        {
-            int spt = StepsPerTick;
-            float dETick = Powi(_dE, spt);
-            int nSyn = _values.Length;
-
-            var meanOfPre = new int[N];
-            for (int i = 0; i < N; i++)
-                meanOfPre[i] = MeanS(_tickSpikeCount[i], _tickSpikeSumS[i], spt);
-
-            for (int idx = 0; idx < nSyn; idx++)
-            {
-                int pre = _preOf[idx], post = _postOf[idx];
-                float acc = _elig[idx] * dETick;
-                int cpost = _tickSpikeCount[post];
-                if (cpost > 0)
-                {
-                    int mPost = MeanS(cpost, _tickSpikeSumS[post], spt);
-                    acc += _aLtp * _tracePreHist[mPost * N + pre] * cpost;
-                }
-                int cpre = _tickSpikeCount[pre];
-                if (cpre > 0)
-                {
-                    int mPre = meanOfPre[pre];
-                    acc -= _aLtd * _tracePostHist[mPre * N + post] * cpre;
-                }
-                _elig[idx] = acc;
-            }
-
-            Array.Clear(_tickSpikeCount, 0, N);
-            Array.Clear(_tickSpikeSumS, 0, N);
-        }
-
-        static int MeanS(int count, long sum, int spt)
-        {
-            if (count <= 0)
-                return 0;
-            // Rust f32::round — half away from zero; MathF.Round — to even.
-            float x = sum / (float)count;
-            int m = (int)MathF.Floor(x + 0.5f);
-            return Math.Min(m, spt - 1);
-        }
+        void TickPlasticityApply() => _plast.Apply();
 
         void PostSubstepTick()
         {
@@ -517,6 +472,7 @@ namespace Dioma.Spikes
         /// (врождённые хвосты выше потолка сохраняются бит-в-бит).
         void ApplyDopamine(float dopamine, float wCap)
         {
+            _plast.ReadEligibility(_elig);
             float lrDopa = _lr * dopamine;
             for (int i = 0; i < _values.Length; i++)
             {
@@ -601,22 +557,19 @@ namespace Dioma.Spikes
             return s;
         }
 
-        public double EligibilitySum()
-        {
-            double s = 0;
-            foreach (float e in _elig) s += e;
-            return s;
-        }
+        public double EligibilitySum() => _plast.EligibilitySum();
 
         // ── Численные кернелы живут в FastMath (порты pillars) ──
 
         static float FastExp(float x) => FastMath.FastExp(x);
 
-        static float Powi(float b, int e) => FastMath.Powi(b, e);
-
-        /// Освободить нативную память кернела (Burst держит NativeArray).
-        /// Managed-кернел ничего не делает, так что вызывать не обязательно —
+        /// Освободить нативную память кернелов (Burst держит NativeArray).
+        /// Managed-кернелы ничего не делают, так что вызывать не обязательно —
         /// но в долгих сессиях со спавном существ лучше не забывать.
-        public void Dispose() => _kernel.Dispose();
+        public void Dispose()
+        {
+            _kernel.Dispose();
+            _plast.Dispose();
+        }
     }
 }

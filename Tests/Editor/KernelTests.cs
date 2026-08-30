@@ -119,6 +119,76 @@ public class KernelTests
     }
 
     [Test]
+    public void PlasticityKernelsAgreeOnEligibility()
+    {
+        // Паритет ПЛАСТИЧНОСТИ отдельно от мембраны: гоняем оба кернела на
+        // одной и той же истории спайков и сверяем eligibility. Тесты мозга
+        // ловят расхождение только когда оно повлияло на спайки, а здесь
+        // виден сам след — до того, как он что-то испортил.
+        if (!SpikeKernels.IsPlasticityAvailable(KernelMode.Burst))
+        {
+            Assert.Ignore("модуль Dioma.Spikes.Burst не установлен");
+            return;
+        }
+
+        using var brain = LoadBrain(KernelMode.Managed);
+        var layout = brain.PlastLayout;
+        using var a = SpikeKernels.CreatePlasticity(KernelMode.Managed, layout);
+        using var b = SpikeKernels.CreatePlasticity(KernelMode.Burst, layout);
+
+        // Синтетическая история: треть нейронов молчит, треть спайкует редко,
+        // треть часто — так покрываются все ветки (cpre/cpost = 0 и > 0).
+        int n = layout.N, spt = layout.StepsPerTick;
+        var history = new int[spt * n];
+        var rng = new System.Random(20260830);
+        for (int s = 0; s < spt; s++)
+            for (int i = 0; i < n; i++)
+            {
+                int rate = i % 3;
+                history[s * n + i] = rate == 0 ? 0
+                    : rng.Next(100) < (rate == 1 ? 3 : 25) ? 1 : 0;
+            }
+
+        var ea = new float[brain.SynapseCount];
+        var eb = new float[brain.SynapseCount];
+        double maxDiff = 0;
+        int firstTick = -1;
+        for (int tick = 0; tick < 5; tick++)
+        {
+            for (int s = 0; s < spt; s++)
+            {
+                a.NoteSpikes(history, s * n, s);
+                b.NoteSpikes(history, s * n, s);
+            }
+            a.Apply();
+            b.Apply();
+            a.ReadEligibility(ea);
+            b.ReadEligibility(eb);
+            for (int i = 0; i < ea.Length; i++)
+            {
+                double d = Math.Abs(ea[i] - eb[i]);
+                if (d > 0 && firstTick < 0) firstTick = tick;
+                maxDiff = Math.Max(maxDiff, d);
+            }
+        }
+
+        // Диагностика: найти первый расходящийся синапс и показать его вход.
+        int badIdx = -1;
+        for (int i = 0; i < ea.Length && badIdx < 0; i++)
+            if (ea[i] != eb[i]) badIdx = i;
+        if (badIdx >= 0)
+            Debug.Log($"[plast-parity] синапс {badIdx}: pre={layout.PreOf[badIdx]} " +
+                      $"post={layout.PostOf[badIdx]}  e_managed={ea[badIdx]:R} " +
+                      $"e_burst={eb[badIdx]:R}  Δ={Math.Abs(ea[badIdx]-eb[badIdx]):E3}");
+
+        Debug.Log($"[plast-parity] 5 тиков × {spt} подшагов, {ea.Length} синапсов: " +
+                  $"max |Δe| = {maxDiff:E2}, первое расхождение на тике {firstTick}; " +
+                  $"Σe = {a.EligibilitySum():F4} / {b.EligibilitySum():F4}");
+
+        Assert.AreEqual(0.0, maxDiff, "eligibility обязан совпадать бит-в-бит");
+    }
+
+    [Test]
     public void KernelBenchmark()
     {
         const int ticks = 200;

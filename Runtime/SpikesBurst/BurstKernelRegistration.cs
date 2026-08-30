@@ -20,9 +20,13 @@ namespace Dioma.Spikes.Burst
 #endif
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-        public static void Register() =>
+        public static void Register()
+        {
             SpikeKernels.Register(KernelMode.Burst,
                 (layout, values) => new BurstSpikeKernel(layout, values));
+            SpikeKernels.RegisterPlasticity(KernelMode.Burst,
+                layout => new BurstPlasticityKernel(layout));
+        }
     }
 }
 #endif

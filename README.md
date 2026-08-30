@@ -12,8 +12,8 @@
 | Сборка | Что | Зависимости |
 |---|---|---|
 | `Dioma.Data` | `.taas` v2 — сохранения; `Json`, `Crc32` | нет |
-| `Dioma.Spikes` | `DiomaBrain` — LIF-alpha, mean-field STDP, гомеостаз, сон, память Болдуина; `ISpikeKernel` — сменный вычислитель мембраны; `SkinnerBox` | Data |
-| `Dioma.Spikes.Burst` | `BurstSpikeKernel` — та же динамика в нативном коде (мембрана ×1.7) | Spikes, Burst, Collections |
+| `Dioma.Spikes` | `DiomaBrain` — LIF-alpha, mean-field STDP, гомеостаз, сон, память Болдуина; `ISpikeKernel`/`IPlasticityKernel` — сменные вычислители; `SkinnerBox` | Data |
+| `Dioma.Spikes.Burst` | те же алгоритмы в нативном коде: мембрана ×1.5, пластичность ×4, тик ×1.9 | Spikes, Burst, Collections, Mathematics |
 | `Dioma.Bio` | `Blood` — реакции, рецепторы, эмиттеры, орган «мозг» | нет |
 | `Dioma.Body` | `Creature` — мост сенсоры→мозг→тело→действие; `Genome`/`Instinct` — наследственность; `CreatureSave` | Spikes, Bio, Data |
 | `Dioma.World` | `TestArena` — эталонный мирок для тестов и смоука | Body |
@@ -63,7 +63,8 @@ var restored = CreatureSave.Load(File.ReadAllBytes("kit.taas"), LoadBrain());
 ```csharp
 using Dioma.Bio; using Dioma.Body; using Dioma.Spikes;
 
-// Кернел мембраны: Managed (эталон), Burst (быстрый), Fastest (что есть)
+// Кернелы (мембрана + пластичность): Managed — эталон, Burst — быстрый,
+// Fastest — что доступно
 var brain = DiomaBrain.FromJson(File.ReadAllText(connectomeJson), KernelMode.Fastest);
 var creature = new Creature(brain);           // тело создаётся само
 

@@ -27,6 +27,12 @@ namespace Dioma.Spikes
         public float RefrSteps;   // round(tau_ref / dt)
         public float VRest, VThresh, VReset;
         public int RingSize;      // round(t_delay / dt) + 1
+
+        /// Какую модель мембраны считать и с какими параметрами. Производные
+        /// величины выше дублируют её поля — они остались для Burst-кернела,
+        /// который читает плоские float в job-структуру.
+        public NeuronModel Model;
+        public NeuronParams Neuron;
     }
 
     /// Вычислитель мембраны. Спайки возвращаются ИСТОРИЕЙ за тик, а не по

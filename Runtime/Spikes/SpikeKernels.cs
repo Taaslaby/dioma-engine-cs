@@ -28,8 +28,30 @@ namespace Dioma.Spikes
         static readonly Dictionary<KernelMode, Func<SpikeLayout, float[], ISpikeKernel>> Membrane
             = new Dictionary<KernelMode, Func<SpikeLayout, float[], ISpikeKernel>>
             {
-                [KernelMode.Managed] = (layout, values) => new ManagedSpikeKernel(layout, values),
+                [KernelMode.Managed] = (layout, values) => CreateManaged(layout, values),
             };
+
+        /// Managed-кернел под модель из раскладки. Burst считает только
+        /// alpha-LIF — остальные модели у него откатываются сюда, поэтому
+        /// зоопарк работает в любом билде.
+        static ISpikeKernel CreateManaged(SpikeLayout layout, float[] values)
+        {
+            switch (layout.Model)
+            {
+                case NeuronModel.AlphaLif:
+                    return new ManagedSpikeKernel<AlphaLifModel>(
+                        layout, values, new AlphaLifModel(layout.Neuron));
+                case NeuronModel.Lif:
+                    return new ManagedSpikeKernel<LifModel>(
+                        layout, values, new LifModel(layout.Neuron));
+                case NeuronModel.Srm0:
+                    return new ManagedSpikeKernel<Srm0Model>(
+                        layout, values, new Srm0Model(layout.Neuron));
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(layout),
+                        $"нет managed-реализации модели {layout.Model}");
+            }
+        }
 
         static readonly Dictionary<KernelMode, Func<PlasticityLayout, IPlasticityKernel>> Plasticity
             = new Dictionary<KernelMode, Func<PlasticityLayout, IPlasticityKernel>>
@@ -62,8 +84,16 @@ namespace Dioma.Spikes
 
         /// Создать вычислитель мембраны. Недоступный режим не роняет игру, а
         /// откатывается на Managed: билд без Burst-модуля должен запускаться.
-        public static ISpikeKernel Create(KernelMode mode, SpikeLayout layout, float[] values) =>
-            Membrane[Resolve(mode, Membrane)](layout, values);
+        /// Нативная реализация есть только у alpha-LIF, поэтому остальные
+        /// модели тоже уходят в Managed — молча, но по документированному
+        /// правилу: `Name` кернела покажет, что получилось.
+        public static ISpikeKernel Create(KernelMode mode, SpikeLayout layout, float[] values)
+        {
+            var resolved = Resolve(mode, Membrane);
+            if (resolved == KernelMode.Burst && layout.Model != NeuronModel.AlphaLif)
+                resolved = KernelMode.Managed;
+            return Membrane[resolved](layout, values);
+        }
 
         public static IPlasticityKernel CreatePlasticity(KernelMode mode, PlasticityLayout layout) =>
             Plasticity[Resolve(mode, Plasticity)](layout);

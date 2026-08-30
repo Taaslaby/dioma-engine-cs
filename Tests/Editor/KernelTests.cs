@@ -25,7 +25,11 @@ public class KernelTests
     {
         Assert.IsTrue(SpikeKernels.IsAvailable(KernelMode.Managed));
         using var brain = LoadBrain(KernelMode.Managed);
-        Assert.AreEqual("managed", brain.KernelName);
+        // Имя managed-кернела несёт и модель мембраны: «managed:alpha-lif».
+        // Так в логе бенчмарка видно, что мерили, а не только чем.
+        Assert.That(brain.KernelName, Does.StartWith("managed"));
+        Assert.That(brain.KernelName, Does.Contain("alpha-lif"),
+            "коннектом без поля model — это alpha-LIF");
     }
 
     [Test]

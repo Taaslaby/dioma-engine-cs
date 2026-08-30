@@ -193,21 +193,42 @@ namespace Dioma.Spikes
                 if (!_inhSyn[idx] && !_homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
                     _targetInSum[_postOf[idx]] += _values[idx];
 
-            // ── alpha-LIF (Shiu et al. 2024): параметры из alpha_lif_population ──
-            // Считаются здесь, чтобы любой кернел получил ровно те же числа.
+            // ── Модель мембраны: alpha-LIF по умолчанию ──
+            // Поля `lif` читаются всегда: формат один на все модели, у каждой
+            // свои используемые параметры. Отсутствие `model` в файле значит
+            // alpha-LIF — так читаются коннектомы, выпущенные до зоопарка.
+            var neuron = new NeuronParams
+            {
+                Dt = Dt,
+                TauM = _tauM,
+                TauRef = _tauRef,
+                TauSyn = _tauSyn,
+                TDelay = _tDelay,
+                VRest = _vRest,
+                VThresh = _vThresh,
+                VReset = _vReset,
+            };
+            var model = NeuronModel.AlphaLif;
+            if (root.TryGetValue("model", out var modelObj) && modelObj != null)
+                model = ParseModel(Json.Str(modelObj));
+
+            // Производные величины считаются здесь, чтобы любой кернел получил
+            // ровно те же числа.
             var layout = new SpikeLayout
             {
                 N = N,
                 RowPtr = _rowPtr,
                 ColIdx = _colIdx,
                 Nt = _nt,
-                TimeFactor = Dt / MathF.Max(_tauM, 1e-6f),
-                RefrSteps = MathF.Max(MathF.Round(_tauRef / Dt), 1.0f),
-                SynDecay = 1.0f - Dt / MathF.Max(_tauSyn, 1e-6f),
+                TimeFactor = neuron.TimeFactor,
+                RefrSteps = neuron.RefrSteps,
+                SynDecay = neuron.SynDecay,
                 VRest = _vRest,
                 VThresh = _vThresh,
                 VReset = _vReset,
-                RingSize = (int)MathF.Round(_tDelay / Dt) + 1,
+                RingSize = neuron.RingSize,
+                Model = model,
+                Neuron = neuron,
             };
             _layout = layout;
             _kernel = SpikeKernels.Create(kernelMode ?? SpikeKernels.Default, layout, _values);
@@ -242,6 +263,34 @@ namespace Dioma.Spikes
         /// мембраны; по умолчанию — `SpikeKernels.Default`.
         public static DiomaBrain FromJson(string text, KernelMode? kernelMode = null) =>
             new DiomaBrain(Json.Parse(text) as Dictionary<string, object>, kernelMode);
+
+        /// Модель мембраны по имени из коннектома. Неизвестное имя — ошибка, а
+        /// не молчаливый откат: файл, написанный под другую динамику, дал бы
+        /// другое существо, и это выглядело бы как «мозг разучился».
+        static NeuronModel ParseModel(string name)
+        {
+            switch (name?.ToLowerInvariant())
+            {
+                case null:
+                case "":
+                case "alpha-lif":
+                case "alphalif":
+                case "lif-alpha":
+                    return NeuronModel.AlphaLif;
+                case "lif":
+                case "if":
+                    return NeuronModel.Lif;
+                case "srm0":
+                case "srm":
+                    return NeuronModel.Srm0;
+                default:
+                    throw new FormatException(
+                        $"неизвестная модель нейрона '{name}'; есть alpha-lif, lif, srm0");
+            }
+        }
+
+        /// Модель мембраны этого мозга.
+        public NeuronModel Model => _layout.Model;
 
         public int RegionOf(int neuron) => _regionOf[neuron];
 

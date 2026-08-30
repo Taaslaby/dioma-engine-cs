@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>smoke</AssemblyName>
+    <RootNamespace>Dioma.Harness</RootNamespace>
+  </PropertyGroup>
+  <!-- Runtime собирается напрямую из исходников пакета: харнесс проверяет тот
+       самый код, который увидит Unity. SpikesBurst не берём — он требует
+       Unity.Burst/Collections, а managed-кернелы и есть эталон. -->
+  <ItemGroup>
+    <Compile Include="..\Runtime\Data\*.cs" />
+    <Compile Include="..\Runtime\Spikes\*.cs" />
+    <Compile Include="..\Runtime\Bio\*.cs" />
+    <Compile Include="..\Runtime\Body\*.cs" />
+    <Compile Include="..\Runtime\World\*.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+</Project>

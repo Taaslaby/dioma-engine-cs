@@ -16,7 +16,7 @@
 | `Dioma.Spikes.Burst` | те же алгоритмы в нативном коде: мембрана ×1.5, пластичность ×4, тик ×1.9 | Spikes, Burst, Collections, Mathematics |
 | `Dioma.Bio` | `Blood` — реакции, рецепторы, эмиттеры, орган «мозг» | нет |
 | `Dioma.Body` | `Creature` — мост сенсоры→мозг→тело→действие; `Genome`/`Instinct` — наследственность; `CreatureSave` | Spikes, Bio, Data |
-| `Dioma.World` | `TestArena` — эталонный мирок для тестов и смоука | Body |
+| `Dioma.World` | `TestArena` — эталонный мирок; `ArenaSmoke`/`BioSmoke` — headless-проверки | Body, Data |
 
 Spikes и Bio изолированы компилятором: спайки ничего не знают о химии,
 химия — о спайках. `Dioma.Spikes` не зависит от Burst — модуль регистрирует
@@ -107,13 +107,27 @@ SR→MR = 1.0, WL→MR = WR→ML = 2.0 (отворот сильнее гомин
 
 ## Тесты
 
-EditMode; путь к данным через `PackageInfo.resolvedPath`, так что работают и
-для embedded-, и для `file:`-подключения пакета.
+Без Unity — одной командой:
+
+```
+scripts/verify.sh                          # паритет мозга, биохимия, обучение, арена
+scripts/verify.sh parity|bio|skinner|arena
+```
+
+Харнесс `Harness~/smoke.csproj` собирает `Runtime/*` напрямую (.NET 8), так
+что пакет проверяется сам, без проекта. Burst-кернелы в него не входят —
+их паритет ловят EditMode-тесты.
+
+С редактором — EditMode; путь к данным через `PackageInfo.resolvedPath`, так
+что работают и для embedded-, и для `file:`-подключения пакета.
 
 ```
 Unity.exe -batchmode -projectPath <proj> -runTests -testPlatform EditMode \
   -testResults results.xml -logFile tests.log
 ```
+
+Полный прогон (EditMode 48, PlayMode 1, три headless-точки) —
+`../dioma-unity/scripts/verify.sh`.
 
 Проверяют: обучение (ящик Скиннера — награждаемый путь растёт, прочие стоят,
 контроль «без награды веса не двигаются»), паритет мозга (240 тиков × 2 коннектома, точные моторные суммы),
@@ -122,5 +136,5 @@ Unity.exe -batchmode -projectPath <proj> -runTests -testPlatform EditMode \
 (кортизол переживает боль, утомление насыщается за 60 тиков полного газа,
 сон капит глюкозу ниже порога изобилия).
 
-Быстрая итерация без редактора — dotnet-харнесс `tools/csharpsmoke` в
-проекте dioma-unity (`dotnet run -c Release -- parity|bio|arena`).
+Эталоны в `Tests/Editor/Data` пишет `dioma/scripts/goldens.sh` — руками их
+не правим, иначе паритет проверяет сам себя.

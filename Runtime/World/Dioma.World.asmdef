@@ -4,7 +4,8 @@
     "references": [
         "Dioma.Body",
         "Dioma.Spikes",
-        "Dioma.Bio"
+        "Dioma.Bio",
+        "Dioma.Data"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

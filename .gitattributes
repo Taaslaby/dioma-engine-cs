@@ -1,0 +1,13 @@
+# В индексе — всегда LF. Иначе Windows-клон помечает каждый файл изменённым
+# и git ругается на CRLF при каждом коммите.
+* text=auto eol=lf
+
+*.cs      text
+*.csproj  text
+*.json    text
+*.md      text
+*.asmdef  text
+*.meta    text
+
+# Эталон формата сохранения: побайтовый, подстановка концов строк его сломает.
+*.taas    binary

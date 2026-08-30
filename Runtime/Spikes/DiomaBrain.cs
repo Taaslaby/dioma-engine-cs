@@ -415,6 +415,40 @@ namespace Dioma.Spikes
             return (ml, mr, total);
         }
 
+        /// Тот же тик на ПРОИЗВОЛЬНОЕ число моторных пулов: `starts[i]..ends[i)`
+        /// суммируется в `sums[i]`. Двухпуловая перегрузка выше — частный
+        /// случай, и она остаётся нетронутой: на ней держится паритет 240/240.
+        ///
+        /// Пулов может быть сколько угодно, потому что кернел и так возвращает
+        /// историю спайков целиком (`StepsPerTick × N`) — суммы считаются по
+        /// уже посчитанным данным, лишней работы нет.
+        public long TickMotorPools(float[] ext, int[] starts, int[] ends, int[] sums)
+        {
+            if (starts == null || ends == null || sums == null)
+                throw new ArgumentNullException(nameof(starts));
+            if (starts.Length != ends.Length || starts.Length != sums.Length)
+                throw new ArgumentException(
+                    $"длины не совпадают: starts={starts.Length}, ends={ends.Length}, sums={sums.Length}");
+
+            _kernel.Run(ext, StepsPerTick, _history);
+            Array.Clear(sums, 0, sums.Length);
+            long total = 0;
+            int np = starts.Length;
+            for (int s = 0; s < StepsPerTick; s++)
+            {
+                int at = s * N;
+                for (int p = 0; p < np; p++)
+                {
+                    int acc = sums[p];
+                    for (int i = starts[p]; i < ends[p]; i++) acc += _history[at + i];
+                    sums[p] = acc;
+                }
+                for (int i = 0; i < N; i++) total += _history[at + i];
+                AfterSubstep(at);
+            }
+            return total;
+        }
+
         /// Пост-обработка подшага: следы STDP, счётчик, отложенные награды.
         /// `at` — смещение подшага в истории спайков.
         void AfterSubstep(int at)

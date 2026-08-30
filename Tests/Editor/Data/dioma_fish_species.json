@@ -1,0 +1,30 @@
+{
+  "name": "fish",
+  "sense": [
+    { "name": "smell.left",  "region": "SL", "current": 4.0, "required": true },
+    { "name": "smell.right", "region": "SR", "current": 4.0, "required": true },
+    { "name": "food.near" }
+  ],
+  "motors": [
+    { "name": "left",  "region": "ML" },
+    { "name": "right", "region": "MR" },
+    { "name": "tail",  "region": "TAIL" }
+  ],
+  "actuators": [
+    { "name": "steer", "kind": "difference", "pools": ["left", "right"], "scale": 0.25 },
+    { "name": "drive", "kind": "sum", "pools": ["tail"], "scale": 0.0016666667 },
+    { "name": "eat",   "kind": "ingest", "senseChannel": "food.near" }
+  ],
+  "rewards": [
+    { "name": "eat",      "trigger": "ate",         "dopamine": 1.0,  "costsGlucose": true, "delayed": true },
+    { "name": "wall",     "trigger": "blocked",     "dopamine": -0.5 },
+    { "name": "approach", "trigger": "channelRose", "dopamine": 0.3,
+      "channels": ["smell.left", "smell.right"], "threshold": 0.02, "proportional": true }
+  ],
+  "reflexes": [
+    ["SL", "ML"],
+    ["SR", "MR"],
+    ["SL", "TAIL"],
+    ["SR", "TAIL"]
+  ]
+}

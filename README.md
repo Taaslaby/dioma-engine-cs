@@ -15,8 +15,8 @@
 | `Dioma.Spikes` | `DiomaBrain` — LIF-alpha, mean-field STDP, гомеостаз, сон, память Болдуина; `ISpikeKernel`/`IPlasticityKernel` — сменные вычислители; `SkinnerBox` | Data |
 | `Dioma.Spikes.Burst` | те же алгоритмы в нативном коде: мембрана ×1.5, пластичность ×4, тик ×1.9 | Spikes, Burst, Collections, Mathematics |
 | `Dioma.Bio` | `Blood` — реакции, рецепторы, эмиттеры, орган «мозг» | нет |
-| `Dioma.Body` | `Creature` — мост сенсоры→мозг→тело→действие; `Genome`/`Instinct` — наследственность; `CreatureSave` | Spikes, Bio, Data |
-| `Dioma.World` | `TestArena` — эталонный мирок; `ArenaSmoke`/`BioSmoke` — headless-проверки | Body, Data |
+| `Dioma.Body` | `Creature` — мост сенсоры→мозг→тело→действие; `SpeciesSpec`/`SpeciesCreature` — то же по спецификации вида; `Genome`/`Instinct` — наследственность; `CreatureSave` | Spikes, Bio, Data |
+| `Dioma.World` | `TestArena` — эталонный мирок; `SpeciesArena` — мир по каналам вида; `ArenaSmoke`/`BioSmoke` — headless-проверки | Body, Data |
 
 Spikes и Bio изолированы компилятором: спайки ничего не знают о химии,
 химия — о спайках. `Dioma.Spikes` не зависит от Burst — модуль регистрирует
@@ -84,6 +84,62 @@ if (action.Asleep) return;    // спит — не двигать и не кор
 Диагностика доступна напрямую: `creature.Blood.Conc[Chem.Hunger]`,
 `creature.LastSpikes`, `creature.FoodEaten`, `creature.Blood.Organ.Damage`.
 
+## Виды: тело как данные
+
+`Creature` выше — это ОДИН вид, записанный кодом: шесть именованных каналов,
+два моторных пула, три правила награды. Другому существу — с хвостом-мотором,
+щупальцем, тремя сенсорами — там места нет.
+
+`SpeciesSpec` переносит это в данные. Вид = сенсорные каналы + моторные пулы +
+актуаторы + правила награды + пары рефлексов:
+
+```csharp
+var fish = SpeciesBuilder.Create("fish")
+    .Sense("smell.left",  "SL", 4f, required: true)
+    .Sense("smell.right", "SR", 4f, required: true)
+    .Sense("food.near", null, 0f)          // канал без региона: его читает тело
+    .Motor("left", "ML").Motor("right", "MR").Motor("tail", "TAIL")
+    .Actuate(Actuator.Difference("steer", "left", "right", 0.25f))
+    .Actuate(Actuator.Sum("drive", new[] { "tail" }, 1f / 600f))   // тяга из СПАЙКОВ
+    .Actuate(Actuator.Ingest("eat", "food.near"))
+    .Reward(RewardRule.ForEating(1f))
+    .Reward(RewardRule.ForCollision(-0.5f))
+    .Reward(RewardRule.ForApproach(0.3f, 0.02f, "smell.left", "smell.right"))
+    .Reflex("SL", "TAIL").Reflex("SR", "TAIL")
+    .Build();
+
+var creature = new SpeciesCreature(fish.Bind(brain));
+var action = creature.Tick(senseFrame);       // ActionFrame по каналам вида
+```
+
+Тот же вид читается из файла: `SpeciesJson.Parse(text)`. Загрузчик не
+дублирует правила — он собирает тот же builder, и валидирует его
+`SpeciesSpec.Validate()`.
+
+Что даёт вид сверх старого пути:
+
+- **любое число моторных пулов**, не два (`TickMotorPools`);
+- **тяга из спайков** (`Actuator.Sum`) наравне с тягой из крови
+  (`Actuator.FromBody`). Это разница видов: рыбка стоит, если хвост молчит;
+  агент ползёт на моторном тонусе даже с молчащим мозгом. Первое можно
+  научить, второе нет;
+- **своя награда новому органу**. Без неё орган вырастет, будет спайкать, и
+  STDP нечем будет его закрепить;
+- **вид беднее схемы работает**: необязательный канал без региона в
+  коннектоме просто не подаётся (мозг без `WL`/`WR` узнаёт о стене только
+  через боль удара).
+
+Имена каналов разрешаются в индексы один раз — при `Bind` и при создании
+мира. В тике только массивы.
+
+`SpeciesArena` — тот же мирок, что `TestArena`, но заполняет каналы по именам:
+нет у вида зрения — мир его и не считает.
+
+Что стережут тесты: `SpeciesCreature(Species.Agent())` ведёт себя **бит-в-бит**
+как захардкоженный `Creature` (позиции, руль, сенсоры, веса, биохимия на 1200
+тиках), вид из JSON — как вид из кода, а `Validate` ловит восемь классов
+ошибок описания.
+
 ## Коннектомы
 
 Мозг загружается из JSON, который выращивает Rust-эталон:
@@ -99,6 +155,8 @@ cargo run --release --bin export_bio        -- <dir>
 |---|---|
 | `dioma_connectome.json` | `agent_layout`: 96 нейронов, 5 регионов (SL/SR/I/ML/MR) |
 | `dioma_c_connectome.json` | `stage_c_lite`: 760 нейронов, 11 регионов (+стены, зрение, кора) |
+| `dioma_fish_connectome.json` | `Fish`: 120 нейронов, 6 регионов (+TAIL). Растит Прометей — Rust-эталона у этого вида нет |
+| `dioma_fish_species.json` | спецификация рыбки как данные |
 
 Формат: `n`, `dt`, `stepsPerTick`, `lif`, `stdp`, `plasticity`, `regions`
 (тег/границы/тормозной), `gains` (матрица гейнов анатомии), `nt` (±1),

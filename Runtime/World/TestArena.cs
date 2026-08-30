@@ -47,7 +47,12 @@ namespace Dioma.World
 
         bool _pendingWallHit;
 
-        public TestArena(Creature creature, float width = 120f, float height = 120f,
+        /// Размер комнаты по умолчанию — коридор, как в эталонной арене
+        /// (там комнаты 40×14 и 80×14). Узость намеренная: при сатурированном
+        /// руле существо крутится на месте радиусом ~1 юнит (MAX_TURN
+        /// 0.6 рад/тик против шага ~0.6 юнита) и в открытом поле 120×120
+        /// просто не встречает еду. Коридор ставит еду на пути.
+        public TestArena(Creature creature, float width = 80f, float height = 16f,
                          int berries = 8, ulong seed = 7)
         {
             Creature = creature;

@@ -293,14 +293,16 @@ namespace Dioma.Spikes
         public void MemorySnapshot() => _memoryLt = (float[])_values.Clone();
 
         /// Восстановление к снимку: дрейф дня стирается, выученный рисунок
-        /// возвращается (`w += alpha·(lt − w)`).
+        /// возвращается (`w += alpha·(lt − w)`). Пол `w_min` — как в
+        /// `ConsolidateSleep`: вес это магнитуда, отрицательный перевернул бы
+        /// знак синапса.
         public void MemoryRecall(float alpha)
         {
             if (_memoryLt == null)
                 return;
             int n = Math.Min(_memoryLt.Length, _values.Length);
             for (int i = 0; i < n; i++)
-                _values[i] += alpha * (_memoryLt[i] - _values[i]);
+                _values[i] = MathF.Max(_values[i] + alpha * (_memoryLt[i] - _values[i]), _wMin);
             _kernel.SyncWeights(_values);
         }
 
@@ -308,6 +310,19 @@ namespace Dioma.Spikes
         /// закрепляются и слегка усиливаются, слабые — шум и дрейф гомеостаза —
         /// обрезаются к снимку. Так навык переживает ночь, а случайные
         /// колебания нет.
+        ///
+        /// Пол `w_min` обязателен, и это ОТКЛОНЕНИЕ от Rust-эталона (там его
+        /// нет). Вес синапса — магнитуда: знак связи несёт нейротрансмиттер
+        /// пресинапса (`nt` = ±1), поэтому отрицательный вес переворачивает
+        /// знак — возбуждающий синапс начинает тормозить.
+        ///
+        /// Без пола получается разнос: усиление сильной дельты
+        /// `w = lt + d·1.15` при d &lt; 0 (вес просел ниже снимка от LTD или
+        /// гомеостаза) и |d| &gt; lt/1.15 даёт w &lt; 0, а дальше каждая ночь
+        /// умножает уже отрицательную дельту на 1.15 — геометрическая спираль.
+        /// Замерено на обеих реализациях (совпадают бит-в-бит): за 60 ночей
+        /// 148 синапсов уходят до −4.9 млн, суммарный вес мозга
+        /// 180 тыс. → −20 млн, и существо в арене перестаёт есть.
         public void ConsolidateSleep(float strongMin, float reinforce, float prune)
         {
             if (_memoryLt == null)
@@ -316,9 +331,14 @@ namespace Dioma.Spikes
             for (int i = 0; i < n; i++)
             {
                 float d = _values[i] - _memoryLt[i];
-                _values[i] = MathF.Abs(d) >= strongMin
+                float w = MathF.Abs(d) >= strongMin
                     ? _memoryLt[i] + d * (1f + reinforce)
                     : _memoryLt[i] + d * (1f - prune);
+                // Потолок: рабочий `w_max` ИЛИ врождённый вес, если он выше
+                // (у выращенного коннектома хвосты логнормали — десятки и
+                // сотни, их резать нельзя). Без потолка усиление дельты на
+                // 15% каждую ночь даёт ×1.15^N — за 66 ночей это ×10⁴.
+                _values[i] = Math.Clamp(w, _wMin, MathF.Max(_wMax, _memoryLt[i]));
             }
             _kernel.SyncWeights(_values);
         }

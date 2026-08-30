@@ -57,6 +57,11 @@ namespace Dioma.Body
         public int AwakeTicks { get; private set; }
         public int SleepLeft { get; private set; }
         public int Nights { get; private set; }
+        /// Диагностические флаги ночной фазы: отключают закрепление весов и
+        /// якорение цели гомеостаза. Нужны, чтобы делить вклад механизмов при
+        /// разборе численных спиралей (см. StabilityTests).
+        public bool DisableNightConsolidation;
+        public bool DisableSleepAnchor;
         public bool Asleep => SleepLeft > 0;
 
         /// Прожиганий рефлекса при рождении: одного прохода мало — дуга
@@ -218,8 +223,10 @@ namespace Dioma.Body
             // тело восстанавливается. Снимок Болдуина НЕ трогается — прирост
             // за жизнь копится до размножения.
             Brain.ClearEligibility();
-            Brain.SleepConsolidate(SleepAnchorAlpha);
-            Brain.ConsolidateSleep(SleepStrongMin, SleepReinforce, SleepPrune);
+            if (!DisableSleepAnchor)
+                Brain.SleepConsolidate(SleepAnchorAlpha);
+            if (!DisableNightConsolidation)
+                Brain.ConsolidateSleep(SleepStrongMin, SleepReinforce, SleepPrune);
             Blood.Sleep();
         }
 

@@ -53,5 +53,10 @@ namespace Dioma.Spikes
         /// `history` длиной `steps × N` заполняется спайками (0/1):
         /// подшаг `s`, нейрон `i` → `history[s * N + i]`.
         void Run(float[] ext, int steps, int[] history);
+
+        /// Скопировать «напряжение» всех нейронов — первый слот состояния
+        /// модели (мембрана у LIF, след у SRM0). Для визуализации; на
+        /// динамику не влияет. `into` длиной N.
+        void ReadMembrane(float[] into);
     }
 }

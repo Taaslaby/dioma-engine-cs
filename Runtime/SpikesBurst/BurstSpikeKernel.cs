@@ -74,6 +74,14 @@ namespace Dioma.Spikes.Burst
 
         public void SyncWeights(float[] values) => _values.CopyFrom(values);
 
+        /// Мембрана всех нейронов — для визуализации. Burst считает только
+        /// alpha-LIF, где первый слот и есть напряжение `_v`.
+        public void ReadMembrane(float[] into)
+        {
+            int n = System.Math.Min(into.Length, _n);
+            for (int i = 0; i < n; i++) into[i] = _v[i];
+        }
+
         public void Run(float[] ext, int steps, int[] history)
         {
             int needed = steps * _n;

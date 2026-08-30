@@ -448,8 +448,28 @@ namespace Dioma.Spikes
         // ней в том же порядке. Для Burst это один переход в нативный код за
         // тик вместо ста.
 
+        // ── Визуализация: чтение состояния без влияния на динамику ──
+
+        /// Пороги мембраны для оси графика: покой, порог, сброс.
+        public (float VRest, float VThresh, float VReset) MembraneRange =>
+            (_vRest, _vThresh, _vReset);
+
+        /// «Напряжение» всех нейронов после последнего тика — мембрана LIF,
+        /// след SRM0. Заполняет `into` длиной N; на динамику не влияет.
+        public void ReadMembrane(float[] into) => _kernel.ReadMembrane(into);
+
+        /// История спайков последнего тика: `StepsPerTick × N`, элемент 0/1,
+        /// подшаг `s` нейрон `i` → `[s * N + i]`. Внутренний буфер — читать
+        /// сразу после `Tick`/`TickMotor`, не мутировать.
+        public IReadOnlyList<int> SpikeHistory => _history;
+
+        /// Суммарный дофамин за последний тик: положительный — награда,
+        /// отрицательный — наказание. Для растра подкрепления.
+        public float LastDopamine { get; private set; }
+
         public (int Ml, int Mr, long Spikes) TickMotor(float[] ext, int ml0, int ml1, int mr0, int mr1)
         {
+            LastDopamine = 0f;
             _kernel.Run(ext, StepsPerTick, _history);
             long total = 0;
             int ml = 0, mr = 0;
@@ -479,6 +499,7 @@ namespace Dioma.Spikes
                 throw new ArgumentException(
                     $"длины не совпадают: starts={starts.Length}, ends={ends.Length}, sums={sums.Length}");
 
+            LastDopamine = 0f;
             _kernel.Run(ext, StepsPerTick, _history);
             Array.Clear(sums, 0, sums.Length);
             long total = 0;
@@ -575,6 +596,7 @@ namespace Dioma.Spikes
         /// (врождённые хвосты выше потолка сохраняются бит-в-бит).
         void ApplyDopamine(float dopamine, float wCap)
         {
+            LastDopamine += dopamine;   // сумма за тик для растра подкрепления
             _plast.ReadEligibility(_elig);
             float lrDopa = _lr * dopamine;
             for (int i = 0; i < _values.Length; i++)
@@ -621,6 +643,7 @@ namespace Dioma.Spikes
         /// предыдущих проб, и избирательности обучения не возникает.
         public long Tick(float[] ext)
         {
+            LastDopamine = 0f;
             _kernel.Run(ext, StepsPerTick, _history);
             long total = 0;
             for (int s = 0; s < StepsPerTick; s++)

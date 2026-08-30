@@ -44,6 +44,11 @@ namespace Dioma.Spikes
         public void SyncWeights(float[] values) =>
             Array.Copy(values, _values, _values.Length);
 
+        /// Первый слот состояния — «напряжение» (мембрана LIF, след SRM0).
+        /// Разложение состояния: слот 0 занимает первые N элементов.
+        public void ReadMembrane(float[] into) =>
+            Array.Copy(_state, 0, into, 0, _l.N);
+
         public void Run(float[] ext, int steps, int[] history)
         {
             int n = _l.N;
@@ -105,6 +110,7 @@ namespace Dioma.Spikes
 
         public string Name => "managed";
         public void SyncWeights(float[] values) => _inner.SyncWeights(values);
+        public void ReadMembrane(float[] into) => _inner.ReadMembrane(into);
         public void Run(float[] ext, int steps, int[] history) => _inner.Run(ext, steps, history);
         public void Dispose() => _inner.Dispose();
     }

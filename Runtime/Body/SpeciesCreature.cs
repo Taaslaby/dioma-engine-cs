@@ -36,6 +36,9 @@ namespace Dioma.Body
         public int FoodEaten { get; private set; }
         public int Collisions { get; private set; }
         public long LastSpikes { get; private set; }
+        /// Веса генома легли на топологию мозга. Ложь у потомков Прометея:
+        /// своя топология → своя длина CSR → наследство отброшено.
+        public bool WeightsInherited { get; }
         public int AwakeTicks { get; private set; }
         public int SleepLeft { get; private set; }
         public int Nights { get; private set; }
@@ -72,7 +75,12 @@ namespace Dioma.Body
             }
 
             // Наследство: выученные родителем веса поверх выращенной топологии.
-            if (Genome.Weights != null && Genome.Weights.Length == Brain.SynapseCount)
+            // У выращенного потомка топология своя, и длины не совпадают —
+            // тогда веса теряются. Это осознанная цена морфогенеза (геном
+            // тела видо-нейтрален и не знает про рёбра), но она обязана быть
+            // ВИДИМОЙ: инстинкты Болдуина наследуются, веса — нет.
+            WeightsInherited = Genome.Weights != null;
+            if (WeightsInherited && Genome.Weights.Length == Brain.SynapseCount)
                 Brain.SetCsrValues(Genome.Weights);
             // Эталон Болдуина: снимок «того, с чем родился».
             Brain.MemorySnapshot();

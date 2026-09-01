@@ -73,6 +73,20 @@ namespace Dioma.Spikes
         /// Долговременный снимок весов (эталон Болдуина); null до MemorySnapshot.
         float[] _memoryLt;
         readonly List<KeyValuePair<int, float>> _pending = new List<KeyValuePair<int, float>>();
+        // ── D1/D2-следы (порт R-STDP из BrainCog BDM-SNN) ──
+        // Тень eligibility с ДРУГИМ затуханием: прямой путь (D1) помнит
+        // коротко, косвенный (D2) — дольше. Награда с выбором пути кладёт
+        // дофамин в один из них: наказание растит тормозящий косвенный
+        // след, а не роняет прямой (как dw_d2 = −r·trace в BDM-SNN).
+        // Идёт ПОВЕРХ кернела: паритет существующего пути не тронут.
+        float[] _eligD1, _eligD2;
+        /// Затухание следов за тик (trace_decay из BDM-SNN, единый на
+        /// оба пути). Различие путей НЕ в памяти (квадратичное затухание
+        /// дало обратное: вклад D2 в любой прошлый тик 0.64^k < 0.8^k —
+        /// «медленнее» получалось только в комментариях), а в ЗНАКЕ при
+        /// применении: RewardPathed переворачивает D2, как dw_d2 = −r·trace.
+        public const float D1Decay = 0.8f;
+        public const float D2Decay = 0.8f;
 
         // Константы распада (считаются один раз — значения детерминированы).
         readonly float _dPre, _dPost, _dE;
@@ -575,7 +589,10 @@ namespace Dioma.Spikes
             _stepCount++;
 
             if (_tickActive && _stepCount % StepsPerTick == 0)
+            {
                 TickPlasticityApply();
+                UpdatePathTraces();
+            }
 
             if (_homeoEveryTicks > 0 &&
                 _stepCount % ((long)_homeoEveryTicks * StepsPerTick) == 0)
@@ -609,6 +626,83 @@ namespace Dioma.Spikes
         public void RewardNow(float dopamine)
         {
             ApplyDopamine(dopamine, _wMax);
+            Normalize();
+        }
+
+        // ── D1/D2-пути (порт R-STDP из BrainCog BDM-SNN) ────────────
+        //
+        // В BDM-SNN выбор действия решают БАЗАЛЬНЫЕ ГАНГЛИИ двумя дорожками:
+        // прямая (DLPFC→StrD1→…) включает действие, косвенная (→StrD2→…)
+        // — ТОРМОЗИТ. Обучение — R-STDP: два затухающих следа копятся от
+        // спайков, а награда домножает ИХ: dw_d1 = +r·trace_d1,
+        // dw_d2 = −r·trace_d2. Отрицательная награда усиливает КОСВЕННЫЙ
+        // путь: наказание строит торможение, а не роняет возбуждение.
+        //
+        // У нас нет ганглиев, но есть то же семейство механизмов: след
+        // eligibility уже считается кернелом. D1/D2 — ТЕНЬ его поверх
+        // (косинусные затухания), поэтому старый путь бит-в-бит не тронут.
+
+        /// Включить D1/D2-следы (лениво: память только если вызвали).
+        public void EnablePathTraces()
+        {
+            if (_eligD1 != null) return;
+            _eligD1 = new float[SynapseCount];
+            _eligD2 = new float[SynapseCount];
+        }
+
+        /// Тени следов для диагностики (NeuroMonitor/HUD): копия вовне,
+        /// null если пути не включены. Индексация — как у CSR-весов.
+        public (float[] D1, float[] D2) ReadPathTraces()
+        {
+            if (_eligD1 == null) return (null, null);
+            return ((float[])_eligD1.Clone(), (float[])_eligD2.Clone());
+        }
+
+        /// Обновление теней eligibility на границе тика. Оба следа получают
+        /// ОДИН прирост (trace_decay BDM-SNN един), но разной природы:
+        ///   D1 — полный знакопеременный eligibility кернела (LTP+LTD):
+        ///         награда усиливает то, что реально двигало спайки;
+        ///   D2 — только LTP-составляющая (max(e,0)): как в BDM-SNN след
+        ///         маскируется в положительную область (их clamp 0..None на
+        ///         кортико-стриарных путях) — знак приносит ТОЛЬКО r.
+        /// Без знакоустойчивости D2 наказание через −trace даёт хаос:
+        /// eligibility знакопеременен, и «строить НЕ-действие» вырождалось
+        /// в случайные броски весов (замер: 0 расходящихся рёбер).
+        void UpdatePathTraces()
+        {
+            if (_eligD1 == null) return;
+            _plast.ReadEligibility(_elig);
+            for (int i = 0; i < _eligD1.Length; i++)
+            {
+                float e = _elig[i];
+                _eligD1[i] = _eligD1[i] * D1Decay + e;
+                _eligD2[i] = _eligD2[i] * D2Decay + (e > 0f ? e : 0f);
+            }
+        }
+
+        /// Награда с выбором ПУТИ (R-STDP BDM-SNN):
+        ///   positive → домножает D1-след (полный, знакопеременный): как
+        ///     RewardNow, но с собственным окном затухания;
+        ///   negative → домножает D2-след (знакоустойчивый) и ЗНАК r
+        ///     разворачивает его: рёбра, чья активность привела к
+        ///     наказанию, падают, но МЕХАНИЗМОМ следа — окно косвенного
+        ///     пути консервативнее безличного LTD кернела.
+        public void RewardPathed(float dopamine)
+        {
+            if (_eligD1 == null)
+                throw new InvalidOperationException(
+                    "RewardPathed требует EnablePathTraces(): тени D1/D2 ленивы");
+            LastDopamine += dopamine;
+            float lrDopa = _lr * dopamine;
+            for (int i = 0; i < _values.Length; i++)
+            {
+                float trace = dopamine >= 0f ? _eligD1[i] : _eligD2[i];
+                float delta = lrDopa * trace;
+                if (delta == 0f)
+                    continue;
+                float w = _values[i] + delta;
+                _values[i] = Math.Clamp(w, _wMin, _wMax);
+            }
             Normalize();
         }
 

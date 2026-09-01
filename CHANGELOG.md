@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.12.1] — 2026-09-01
+
+ДНК-машина: полная (аудит против Rust вскрыл заглушки), с мостом в
+legacy-геном и классом Channels — гены мембраны становятся наследуемыми.
+
+### Fixed (против 0.12.0)
+- Мутации Steering/Rules/Instincts/Metabolism были ЗАГЛУШКАМИ (default:
+  break) — теперь честные порты: Steering дрейфует относительна с
+  клэмпами (GrowSteps 50..1000, TurnRateDeg ≤ 90, всё > 0.1), Rules
+  дрейфуют параметры шаблонов (RULE_SIGMA 0.08), Instincts — Instinct.
+  Mutate (INSTINCT_SIGMA 0.10), Metabolism — Mutate (METAB_SIGMA 0.10).
+- Кроссовер Coat/Eye/Memory смешивал ВСЕ поля сразу — теперь
+  по-канально/по-полевое СВОИМИ полями (как GenePayload::crossover):
+  Coat — rgb раздельно, Eye — variant/gain, Memory — variant/tau.
+
+### Added
+- **Адаптеры Legacy ↔ DNA**: `FromLegacy` (Genome → DnaGenome, один ген
+  на непустой класс; веса синапсов в ДНК не живут — топология
+  выращенных потомков своя), `ToLegacy(age)` (ДНК → Genome c фильтром
+  по онтогенезу и полу: одиночные классы — первый выраженный, списковые
+  — конкатенация), `SyncLegacy` (зеркала легаси-классов заменяются,
+  новые классы живы).
+- **Класс Channels (код 8)**: PhysioGenes (HCN/KCNQ/para/leak) как ген
+  ДНК — мутация (относительный дрейф), по-генный кроссовер, байтовый
+  формат. РАСШИРЕНИЕ DNA1: старые сборки прочитают код 8 как Raw и не
+  тронут; новые — узнают. ДНК → HaapPhysiology.ColumnsInto напрямую:
+  нокаут KCNQ в геноме = ноль M-тока в профиле мозга (тест держит).
+
+### Тесты: +5 (146 EditMode всего)
+- Steering_Mutates_With_Clamps (дрейф обязан менять, границы держатся),
+  Channels_Roundtrip_And_Mutate, Channels_Feed_Haap_Profile (ДНК →
+  мембрана одним числом), Legacy_Adapters_Roundtrip (туда-обратно без
+  потерь, SyncLegacy), Ontogenesis_In_ToLegacy (юношеский ген метаболизма
+  гаснет, взрослый включается).
+
 ## [0.12.0] — 2026-09-01
 
 Спайк-ядро, ДНК и биология: HAAP-мембрана, регуляторный геном,

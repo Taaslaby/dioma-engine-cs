@@ -32,6 +32,12 @@ namespace Dioma.Body
         Coat = 5,
         Eye = 6,
         Memory = 7,
+        /// Гены экспрессии каналов мембраны (HCN/KCNQ/para/leak): канал
+        /// HAAP-профиля становится наследуемым. Код 8 — РАСШИРЕНИЕ формата
+        /// DNA1 против Rust-эталона (там класса ещё нет): старые сборки
+        /// прочитают его как Raw и не тронут, новые — узнают. Так растёт
+        /// геном, не ломая сейвы.
+        Channels = 8,
     }
 
     /// Сцепка гена с полом (как в Creatures: гены на половых хромосомах
@@ -112,6 +118,8 @@ namespace Dioma.Body
         public (ushort Variant, float Gain) Eye;
         /// Memory: вариант + tau.
         public (ushort Variant, float Tau) Memory;
+        /// Channels: гены экспрессии каналов мембраны (HAAP-профиль).
+        public PhysioGenes Channels;
         /// Raw: незнакомый класс — float'ы как есть.
         public float[] Raw;
     }
@@ -152,8 +160,17 @@ namespace Dioma.Body
         public const float EyeGainSigma = 0.05f;
         public const float MemTauSigma = 0.05f;
         public const float RegSigma = 0.05f;
+        /// Сигмы легаси-классов (genome.rs): Steering в f64, остальные f32.
+        public const double SteeringSigma = 0.05;
+        public const float RulesSigma = 0.08f;
+        public const float InstinctSigma = 0.10f;
+        public const float MetabSigma = 0.10f;
+        /// Дрейф экспрессии каналов: относительный, как PhysioGenes.Mutate.
+        public const float ChannelsSigma = 0.05f;
 
-        /// Мутация: каждый mutable-ген дрейфует по своему классу.
+        /// Мутация: каждый mutable-ген дрейфует по своему классу — все
+        /// классы, как в Rust `GenePayload::mutate`. Порядок вызовов ГСЧ
+        /// сохранён по полям, один сид — одна мутация.
         public DnaGenome Mutate(XorShift rng)
         {
             var child = new DnaGenome { Sex = Sex };
@@ -167,6 +184,44 @@ namespace Dioma.Body
                 var g = new Gene { Header = gene.Header, Payload = gene.Payload };
                 switch (gene.Header.Kind)
                 {
+                    case GeneKind.Steering:
+                        g.Payload.Steering = MutateSteering(
+                            gene.Payload.Steering, rng, SteeringSigma);
+                        break;
+                    case GeneKind.Rules:
+                    {
+                        var rules = gene.Payload.Rules;
+                        var mutated = new List<RuleData>(rules.Count);
+                        foreach (var r in rules)
+                        {
+                            var p = new float[8];
+                            // Дрейф параметров шаблона (RULE_SIGMA):
+                            // шаблон — выбор оператора, не число.
+                            for (int i = 0; i < 8; i++)
+                                p[i] = MathF.Max(
+                                    r.P[i] + (float)rng.Gauss() * RulesSigma, 0f);
+                            mutated.Add(new RuleData { Template = r.Template, P = p });
+                        }
+                        g.Payload.Rules = mutated;
+                        break;
+                    }
+                    case GeneKind.Instincts:
+                    {
+                        var instincts = gene.Payload.Instincts;
+                        var mutated = new List<Instinct>(instincts.Count);
+                        foreach (var ins in instincts)
+                            mutated.Add(ins.Mutate(rng, InstinctSigma));
+                        g.Payload.Instincts = mutated;
+                        break;
+                    }
+                    case GeneKind.Metabolism:
+                        g.Payload.Metabolism =
+                            gene.Payload.Metabolism.Mutate(rng, MetabSigma);
+                        break;
+                    case GeneKind.Regulatory:
+                        g.Payload.Regulatory =
+                            gene.Payload.Regulatory.Mutate(rng, RegSigma);
+                        break;
                     case GeneKind.Coat:
                         var c = gene.Payload.Coat;
                         g.Payload.Coat = (
@@ -176,6 +231,7 @@ namespace Dioma.Body
                         break;
                     case GeneKind.Eye:
                         var e = gene.Payload.Eye;
+                        // Вариант — id модели, НЕ дрейфует мутацией.
                         g.Payload.Eye = (e.Variant,
                             MathF.Max(e.Gain + (float)rng.Gauss() * EyeGainSigma, 0f));
                         break;
@@ -184,17 +240,39 @@ namespace Dioma.Body
                         g.Payload.Memory = (m.Variant,
                             MathF.Max(m.Tau * (1f + (float)rng.Gauss() * MemTauSigma), 0f));
                         break;
-                    case GeneKind.Regulatory:
-                        g.Payload.Regulatory =
-                            gene.Payload.Regulatory.Mutate(rng, RegSigma);
+                    case GeneKind.Channels:
+                        g.Payload.Channels =
+                            gene.Payload.Channels.Mutate(rng, ChannelsSigma);
                         break;
                     default:
-                        break;  // Steering/Rules/Instincts/Metabolism: как в Rust,
-                                // дрейфуют адаптерами legacy-генома
+                        break;  // Raw: данные как есть, мутация не трогает
                 }
                 child.Genes.Add(g);
             }
             return child;
+        }
+
+        /// Мутация генома роста: относительный дрейф (±sigma), всё
+        /// положительное, экстремальные значения зажаты — иначе мутация
+        /// ломает саму возможность роста коннектома. Шаги — [50, 1000].
+        /// Порт `Steering::mutate` (grow.rs), порядок полей как в Rust.
+        static SteeringData MutateSteering(in SteeringData s, XorShift rng, double sigma)
+        {
+            double Drift(double v) => Math.Max(v * (1.0 + rng.Gauss() * sigma), 0.1);
+            return new SteeringData
+            {
+                NoiseWeight = Drift(s.NoiseWeight),
+                GradientWeight = Drift(s.GradientWeight),
+                OldDirWeight = Drift(s.OldDirWeight),
+                TurnRateDeg = Math.Min(Drift(s.TurnRateDeg), 90.0),
+                StopConcentration = Drift(s.StopConcentration),
+                BumpMax = Drift(s.BumpMax),
+                BumpSigma = Drift(s.BumpSigma),
+                SynapseDist = Drift(s.SynapseDist),
+                GrowSteps = (ulong)Math.Clamp(
+                    Math.Round((double)s.GrowSteps * (1.0 + rng.Gauss() * sigma)),
+                    50.0, 1000.0),
+            };
         }
 
         /// Кроссовер: гены группируются по классу, слоты выравниваются по
@@ -258,17 +336,56 @@ namespace Dioma.Body
             if (!bOk) return a;
             // Оба доступны: Raw и не-мутабельные наследуются от A целиком.
             if (!a.Header.Mutable || !b.Header.Mutable) return a;
-            if (a.Header.Kind is GeneKind.Coat or GeneKind.Eye or GeneKind.Memory)
+            // Новые классы — по-канальное/по-полевое смешивание СВОИХ
+            // полей (как в Rust GenePayload::crossover): Coat смешивает
+            // rgb-каналы, Eye — variant и gain, Memory — variant и tau.
+            // Шапка — от A. Смешивать «всё подряд» нельзя: ген Coat не
+            // должен трогать чужие поля.
+            var mixed = new Gene { Header = a.Header, Payload = a.Payload };
+            switch (a.Header.Kind)
             {
-                // Новые классы: по-канальное/по-полевое смешивание.
-                var mixed = new Gene { Header = a.Header, Payload = a.Payload };
-                if (rng.Unit() < 0.5)
-                    mixed.Payload.Coat = b.Payload.Coat;
-                if (rng.Unit() < 0.5)
-                    mixed.Payload.Eye = b.Payload.Eye;
-                if (rng.Unit() < 0.5)
-                    mixed.Payload.Memory = b.Payload.Memory;
-                return mixed;
+                case GeneKind.Coat:
+                {
+                    var (ra, ga, ba) = a.Payload.Coat;
+                    var (rb, gb, bb) = b.Payload.Coat;
+                    mixed.Payload.Coat = (
+                        rng.Unit() < 0.5 ? ra : rb,
+                        rng.Unit() < 0.5 ? ga : gb,
+                        rng.Unit() < 0.5 ? ba : bb);
+                    return mixed;
+                }
+                case GeneKind.Eye:
+                {
+                    var ea = a.Payload.Eye;
+                    var eb = b.Payload.Eye;
+                    mixed.Payload.Eye = (
+                        rng.Unit() < 0.5 ? ea.Variant : eb.Variant,
+                        rng.Unit() < 0.5 ? ea.Gain : eb.Gain);
+                    return mixed;
+                }
+                case GeneKind.Memory:
+                {
+                    var ma = a.Payload.Memory;
+                    var mb = b.Payload.Memory;
+                    mixed.Payload.Memory = (
+                        rng.Unit() < 0.5 ? ma.Variant : mb.Variant,
+                        rng.Unit() < 0.5 ? ma.Tau : mb.Tau);
+                    return mixed;
+                }
+                case GeneKind.Channels:
+                {
+                    // По-генное: каждый канал — 50/50 от одного из родителей.
+                    var ca = a.Payload.Channels;
+                    var cb = b.Payload.Channels;
+                    mixed.Payload.Channels = new PhysioGenes
+                    {
+                        Hcn = rng.Unit() < 0.5 ? ca.Hcn : cb.Hcn,
+                        Kcnq = rng.Unit() < 0.5 ? ca.Kcnq : cb.Kcnq,
+                        Para = rng.Unit() < 0.5 ? ca.Para : cb.Para,
+                        Leak = rng.Unit() < 0.5 ? ca.Leak : cb.Leak,
+                    };
+                    return mixed;
+                }
             }
             return rng.Unit() < 0.5 ? a : b;
         }
@@ -279,6 +396,92 @@ namespace Dioma.Body
             foreach (var g in Genes)
                 if (g.Header.ExpressedAt(age) && g.Header.SexLink.Ok(Sex))
                     yield return g;
+        }
+
+        // ── Адаптеры к legacy-геному (Genome) ────────────────────────
+        // Переходный период держит ДВЕ машины: Genome (выраженный фенотип,
+        // им живут арены) и DnaGenome (гены с онтогенезом, им будет жить
+        // эволюция). Адаптеры ниже — мост: ДНК без легаси-классов — гены
+        // будущего, легаси без ДНК — фенотип без истории.
+
+        /// Обратный адаптер: legacy-геном → ДНК. Каждый непустой
+        /// легаси-класс сворачивается в ОДИН ген (порт from_creature_genome);
+        /// пустые списки генов не дают. Веса синапсов в ДНК НЕ живут:
+        /// у выращенных потомков топология своя, а наследование весов —
+        /// забота Genome (см. SpeciesCreature.WeightsInherited).
+        public static DnaGenome FromLegacy(Genome legacy, Sex sex)
+        {
+            var dna = new DnaGenome { Sex = sex };
+            dna.Genes.Add(new Gene
+            {
+                Header = GeneHeader.New(GeneKind.Metabolism),
+                Payload = new GenePayload { Metabolism = legacy.Metabolism },
+            });
+            if (legacy.Instincts.Count > 0)
+                dna.Genes.Add(new Gene
+                {
+                    Header = GeneHeader.New(GeneKind.Instincts),
+                    Payload = new GenePayload { Instincts =
+                        new List<Instinct>(legacy.Instincts) },
+                });
+            if (legacy.Reg != null)
+                dna.Genes.Add(new Gene
+                {
+                    Header = GeneHeader.New(GeneKind.Regulatory),
+                    Payload = new GenePayload { Regulatory = legacy.Reg },
+                });
+            return dna;
+        }
+
+        /// Прямой адаптер: ДНК → legacy-геном для существа возраста `age`
+        /// (порт to_creature_genome). Фильтрует по онтогенезу и полу:
+        /// одиночные классы (Metabolism) — первый выраженный; списковые
+        /// (Instincts) — конкатенация; незнакомые — мимо.
+        public Genome ToLegacy(ulong age)
+        {
+            var g = Genome.Newborn();
+            bool metabTaken = false;
+            foreach (var gene in ExpressedAt(age))
+            {
+                switch (gene.Header.Kind)
+                {
+                    case GeneKind.Metabolism when !metabTaken:
+                        g.Metabolism = gene.Payload.Metabolism;
+                        metabTaken = true;
+                        break;
+                    case GeneKind.Instincts:
+                        foreach (var i in gene.Payload.Instincts)
+                            g.Instincts.Add(i.Clone());
+                        break;
+                    case GeneKind.Regulatory:
+                        if (gene.Payload.Regulatory != null)
+                            CopyReg(g, gene.Payload.Regulatory);
+                        break;
+                }
+            }
+            return g;
+        }
+
+        static void CopyReg(Genome into, RegGenome from)
+        {
+            for (int i = 0; i < RegTargets.N; i++)
+                into.Reg.Systemic[i] = from.Systemic[i];
+            foreach (var gene in from.Regional)
+                into.Reg.Regional.Add(gene);
+        }
+
+        /// Синхронизация зеркал легаси-классов (порт sync_legacy): гены
+        /// Metabolism/Instincts/Regulatory заменяются свежими из legacy,
+        /// пол — тоже. Новые классы (Coat/Eye/Memory/Raw) не трогаются:
+        /// их эволюционирует только машина ДНК.
+        public void SyncLegacy(Genome legacy, Sex sex)
+        {
+            Genes.RemoveAll(g =>
+                g.Header.Kind is GeneKind.Metabolism or GeneKind.Instincts
+                                  or GeneKind.Regulatory);
+            var fresh = FromLegacy(legacy, sex);
+            Genes.AddRange(fresh.Genes);
+            Sex = sex;
         }
     }
 
@@ -478,6 +681,15 @@ namespace Dioma.Body
                     WriteU16(s, g.Payload.Memory.Variant);
                     WriteF32(s, g.Payload.Memory.Tau);
                     break;
+                case GeneKind.Channels:
+                {
+                    var ch = g.Payload.Channels;
+                    WriteF32(s, ch.Hcn);
+                    WriteF32(s, ch.Kcnq);
+                    WriteF32(s, ch.Para);
+                    WriteF32(s, ch.Leak);
+                    break;
+                }
             }
         }
 
@@ -578,6 +790,15 @@ namespace Dioma.Body
                     break;
                 case GeneKind.Memory:
                     payload.Memory = (ReadU16(b, ref pos), ReadF32(b, ref pos));
+                    break;
+                case GeneKind.Channels:
+                    payload.Channels = new PhysioGenes
+                    {
+                        Hcn = ReadF32(b, ref pos),
+                        Kcnq = ReadF32(b, ref pos),
+                        Para = ReadF32(b, ref pos),
+                        Leak = ReadF32(b, ref pos),
+                    };
                     break;
                 default:
                     // Незнакомый класс: float'ы как есть (Raw-семантика).

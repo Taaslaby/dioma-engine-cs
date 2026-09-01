@@ -55,6 +55,28 @@ public class DnaGenomeTests
             Header = GeneHeader.New(GeneKind.Memory),
             Payload = new GenePayload { Memory = (1, 200f) },
         });
+        g.Genes.Add(new Gene
+        {
+            Header = GeneHeader.New(GeneKind.Channels),
+            Payload = new GenePayload
+            {
+                Channels = new Dioma.Spikes.PhysioGenes
+                { Hcn = 1f, Kcnq = 0.8f, Para = 1.2f, Leak = 0.9f },
+            },
+        });
+        g.Genes.Add(new Gene
+        {
+            Header = GeneHeader.New(GeneKind.Steering),
+            Payload = new GenePayload
+            {
+                Steering = new SteeringData
+                {
+                    NoiseWeight = 0.05, GradientWeight = 1.2, OldDirWeight = 0.2,
+                    TurnRateDeg = 25.0, StopConcentration = 9.5, BumpMax = 5.0,
+                    BumpSigma = 30.0, SynapseDist = 13.0, GrowSteps = 400,
+                },
+            },
+        });
         return g;
     }
 
@@ -186,6 +208,159 @@ public class DnaGenomeTests
         var reg = mutated.Genes.First(x => x.Header.Kind == GeneKind.Regulatory);
         foreach (var slot in reg.Payload.Regulatory.Systemic)
             Assert.That(slot.Strength, Is.InRange(0f, 2f));
+    }
+
+    [Test]
+    public void Steering_Mutates_With_Clamps()
+    {
+        var g = new DnaGenome { Sex = Sex.Male };
+        g.Genes.Add(new Gene
+        {
+            Header = GeneHeader.New(GeneKind.Steering),
+            Payload = new GenePayload
+            {
+                Steering = new SteeringData
+                {
+                    NoiseWeight = 0.05, GradientWeight = 1.2, OldDirWeight = 0.2,
+                    TurnRateDeg = 25.0, StopConcentration = 9.5, BumpMax = 5.0,
+                    BumpSigma = 30.0, SynapseDist = 13.0, GrowSteps = 400,
+                },
+            },
+        });
+        var rng = new XorShift(3);
+        bool anyChanged = false;
+        for (int i = 0; i < 20; i++)
+        {
+            g = g.Mutate(rng);
+            var st = g.Genes[0].Payload.Steering;
+            Assert.GreaterOrEqual((double)st.GrowSteps, 50.0);
+            Assert.LessOrEqual((double)st.GrowSteps, 1000.0);
+            Assert.LessOrEqual(st.TurnRateDeg, 90.0);
+            Assert.Greater(st.SynapseDist, 0.0);
+            if (st.GrowSteps != 400) anyChanged = true;
+        }
+        Assert.IsTrue(anyChanged, "мутация Steering обязана дрейфовать");
+    }
+
+    [Test]
+    public void Channels_Roundtrip_And_Mutate()
+    {
+        var g = new DnaGenome { Sex = Sex.Female };
+        g.Genes.Add(new Gene
+        {
+            Header = GeneHeader.New(GeneKind.Channels),
+            Payload = new GenePayload
+            {
+                Channels = new Dioma.Spikes.PhysioGenes
+                { Hcn = 1f, Kcnq = 0.8f, Para = 1.2f, Leak = 0.9f },
+            },
+        });
+        var bytes = DnaCodec.ToBytes(g);
+        var read = DnaCodec.FromBytes(bytes, out var err);
+        Assert.AreEqual(DnaError.None, err);
+        var ch = read.Genes[0].Payload.Channels;
+        Assert.AreEqual(0.8f, ch.Kcnq, 1e-6f);
+        Assert.AreEqual(1.2f, ch.Para, 1e-6f);
+
+        var rng = new XorShift(5);
+        var mutated = g.Mutate(rng).Genes[0].Payload.Channels;
+        Assert.Greater(mutated.Hcn, 0f);
+        Assert.Greater(mutated.Leak, 0f);
+    }
+
+    [Test]
+    public void Channels_Feed_Haap_Profile()
+    {
+        var g = new DnaGenome { Sex = Sex.Female };
+        var ko = Dioma.Spikes.PhysioGenes.Wildtype();
+        ko.Kcnq = 0f;
+        g.Genes.Add(new Gene
+        {
+            Header = GeneHeader.New(GeneKind.Channels),
+            Payload = new GenePayload { Channels = ko },
+        });
+
+        var genes = g.Genes[0].Payload.Channels;
+        var row = new float[Dioma.Spikes.HaapCols.N];
+        Dioma.Spikes.HaapPhysiology.ColumnsInto(row,
+            Dioma.Spikes.NeuronArchetype.Motor, genes);
+        Assert.AreEqual(0f, row[(int)Dioma.Spikes.HaapCol.GM],
+            "нокаут KCNQ обязан убрать M-ток");
+
+        var wild = new float[Dioma.Spikes.HaapCols.N];
+        Dioma.Spikes.HaapPhysiology.ColumnsInto(wild,
+            Dioma.Spikes.NeuronArchetype.Motor,
+            Dioma.Spikes.PhysioGenes.Wildtype());
+        Assert.Greater(wild[(int)Dioma.Spikes.HaapCol.GM], 0f,
+            "дикий тип держит M-ток");
+    }
+
+    [Test]
+    public void Legacy_Adapters_Roundtrip()
+    {
+        var legacy = Genome.Newborn();
+        legacy.Metabolism = new MetabolismGene
+        {
+            CostPerActivity = 0.002f, StarveDamage = 0.005f,
+            CostPerDopamine = 0.4f, HealRate = 0.0001f,
+        };
+        var slot = legacy.Reg.Systemic[(int)RegTarget.Plasticity];
+        slot.Strength = 1.3f;
+        legacy.Reg.Systemic[(int)RegTarget.Plasticity] = slot;
+
+        var dna = DnaGenome.FromLegacy(legacy, Sex.Female);
+        Assert.IsTrue(dna.Genes.Any(x => x.Header.Kind == GeneKind.Metabolism));
+        Assert.IsTrue(dna.Genes.Any(x => x.Header.Kind == GeneKind.Regulatory));
+
+        var back = dna.ToLegacy(0);
+        Assert.AreEqual(0.002f, back.Metabolism.CostPerActivity, 1e-7f);
+        Assert.AreEqual(1.3f,
+            back.Reg.Systemic[(int)RegTarget.Plasticity].Strength, 1e-6f);
+
+        var updated = Genome.Newborn();
+        updated.Metabolism = new MetabolismGene
+        { CostPerActivity = 0.009f, StarveDamage = 0.001f,
+          CostPerDopamine = 0.2f, HealRate = 0.0002f };
+        dna.SyncLegacy(updated, Sex.Male);
+        Assert.AreEqual(Sex.Male, dna.Sex);
+        var reg = dna.ToLegacy(0);
+        Assert.AreEqual(0.009f, reg.Metabolism.CostPerActivity, 1e-7f);
+    }
+
+    [Test]
+    public void Ontogenesis_In_ToLegacy()
+    {
+        var g = new DnaGenome { Sex = Sex.Male };
+        var h = GeneHeader.New(GeneKind.Metabolism);
+        h.TurnOn = 0;
+        h.TurnOff = 500;
+        g.Genes.Add(new Gene
+        {
+            Header = h,
+            Payload = new GenePayload
+            {
+                Metabolism = new MetabolismGene
+                { CostPerActivity = 0.5f, StarveDamage = 0.01f,
+                  CostPerDopamine = 1f, HealRate = 0.01f },
+            },
+        });
+        var h2 = GeneHeader.New(GeneKind.Metabolism);
+        h2.TurnOn = 500;
+        g.Genes.Add(new Gene
+        {
+            Header = h2,
+            Payload = new GenePayload
+            {
+                Metabolism = new MetabolismGene
+                { CostPerActivity = 0.002f, StarveDamage = 0.004f,
+                  CostPerDopamine = 0.4f, HealRate = 0.0001f },
+            },
+        });
+
+        Assert.AreEqual(0.5f, g.ToLegacy(100).Metabolism.CostPerActivity, 1e-6f,
+            "юношеский ген выражен в 100");
+        Assert.AreEqual(0.002f, g.ToLegacy(600).Metabolism.CostPerActivity, 1e-6f,
+            "в 600 — только взрослый");
     }
 
     [Test]

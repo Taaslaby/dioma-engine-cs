@@ -161,7 +161,8 @@ namespace Dioma.Body
                 o.TryGetValue("threshold", out var t) ? Json.F(t) : 0f,
                 o.TryGetValue("proportional", out var p) && Json.Bool(p),
                 o.TryGetValue("costsGlucose", out var c) && Json.Bool(c),
-                o.TryGetValue("delayed", out var l) && Json.Bool(l));
+                o.TryGetValue("delayed", out var l) && Json.Bool(l),
+                o.TryGetValue("pathed", out var pp) && Json.Bool(pp));
         }
 
         static string Req(Dictionary<string, object> o, string key)

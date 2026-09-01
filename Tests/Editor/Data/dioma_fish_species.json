@@ -17,7 +17,7 @@
   ],
   "rewards": [
     { "name": "eat",      "trigger": "ate",         "dopamine": 1.0,  "costsGlucose": true, "delayed": true },
-    { "name": "wall",     "trigger": "blocked",     "dopamine": -0.5 },
+    { "name": "wall-pathed", "trigger": "blocked", "dopamine": -0.5, "pathed": true },
     { "name": "approach", "trigger": "channelRose", "dopamine": 0.3,
       "channels": ["smell.left", "smell.right"], "threshold": 0.02, "proportional": true }
   ],

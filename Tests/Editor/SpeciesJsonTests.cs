@@ -65,6 +65,7 @@ public class SpeciesJsonTests
             Assert.AreEqual(a.Proportional, b.Proportional, $"правило {a.Name}: пропорциональность");
             Assert.AreEqual(a.CostsGlucose, b.CostsGlucose, $"правило {a.Name}: оплата глюкозой");
             Assert.AreEqual(a.Delayed, b.Delayed, $"правило {a.Name}: отложенность");
+            Assert.AreEqual(a.Pathed, b.Pathed, $"правило {a.Name}: путь D1/D2");
         }
 
         Assert.AreEqual(fromCode.ReflexPairs, fromJson.ReflexPairs);

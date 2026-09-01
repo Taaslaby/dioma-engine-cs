@@ -73,6 +73,8 @@ namespace Dioma.Body
         /// «сенсор → мотор» получила спайк на обоих концах.
         public const float LearnedPreDrive = 4f;
         public const float LearnedPostDrive = 8f;
+        /// Дрейф регуляторных генов (REG_SIGMA в Rust dna.rs).
+        public const float RegulatorySigma = 0.05f;
         /// Пары регионов, которые могут стать врождёнными рефлексами.
         /// Зрение здесь намеренно отсутствует: оно учится, а не прошивается —
         /// иначе охота теряет гибкость.
@@ -85,6 +87,10 @@ namespace Dioma.Body
         public float[] Weights;
         public MetabolismGene Metabolism = MetabolismGene.Default();
         public readonly List<Instinct> Instincts = new List<Instinct>();
+        /// Регуляторный геном: сила пластичности/инстинктов/перестройки/
+        /// сытости по возрасту. Дикий тип нейтрален — поведение не меняется,
+        /// пока гены не занесли руками или мутацией.
+        public RegGenome Reg = RegGenome.Wildtype();
 
         public static Genome Newborn() => new Genome();
 
@@ -95,13 +101,23 @@ namespace Dioma.Body
                 Weights = Weights == null ? null : (float[])Weights.Clone(),
                 Metabolism = Metabolism,
             };
+            CopyReg(g.Reg, Reg);
             foreach (var i in Instincts)
                 g.Instincts.Add(i.Clone());
             return g;
         }
 
-        /// Потомок генома: веса дрейфуют, метаболизм и инстинкты мутируют.
-        /// Детерминированно от сида — один сид даёт одного потомка.
+        static void CopyReg(RegGenome into, RegGenome from)
+        {
+            for (int i = 0; i < RegTargets.N; i++)
+                into.Systemic[i] = from.Systemic[i];
+            foreach (var gene in from.Regional)
+                into.Regional.Add(gene);
+        }
+
+        /// Потомок генома: веса дрейфуют, метаболизм, инстинкты и
+        /// регуляторные гены мутируют. Детерминированно от сида — один сид
+        /// даёт одного потомка.
         public Genome Mutate(XorShift rng)
         {
             var child = new Genome { Metabolism = Metabolism.Mutate(rng, MetabolismSigma) };
@@ -116,6 +132,7 @@ namespace Dioma.Body
             }
             foreach (var i in Instincts)
                 child.Instincts.Add(i.Mutate(rng, InstinctSigma));
+            child.Reg = Reg.Mutate(rng, RegulatorySigma);
             return child;
         }
 

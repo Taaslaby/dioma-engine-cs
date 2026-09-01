@@ -47,6 +47,11 @@ namespace Dioma.Spikes
                 case NeuronModel.Srm0:
                     return new ManagedSpikeKernel<Srm0Model>(
                         layout, values, new Srm0Model(layout.Neuron));
+                case NeuronModel.Haap:
+                    // HAAP требует per-neuron профиль — модель сама проверит
+                    // его наличие и объяснит, чего не хватает.
+                    return new ManagedSpikeKernel<HaapModel>(
+                        layout, values, new HaapModel(layout));
                 default:
                     throw new ArgumentOutOfRangeException(nameof(layout),
                         $"нет managed-реализации модели {layout.Model}");

@@ -229,6 +229,7 @@ namespace Dioma.Spikes
                 RingSize = neuron.RingSize,
                 Model = model,
                 Neuron = neuron,
+                HaapProfile = ParseHaapProfile(root, N),
             };
             _layout = layout;
             _kernel = SpikeKernels.Create(kernelMode ?? SpikeKernels.Default, layout, _values);
@@ -283,14 +284,45 @@ namespace Dioma.Spikes
                 case "srm0":
                 case "srm":
                     return NeuronModel.Srm0;
+                case "haap":
+                    return NeuronModel.Haap;
                 default:
                     throw new FormatException(
-                        $"неизвестная модель нейрона '{name}'; есть alpha-lif, lif, srm0");
+                        $"неизвестная модель нейрона '{name}'; есть alpha-lif, lif, srm0, haap");
             }
         }
 
         /// Модель мембраны этого мозга.
         public NeuronModel Model => _layout.Model;
+
+        /// Per-neuron профиль HAAP из коннектома: `"haapProfile": [[17 колонок
+        /// на нейрон], …]`. Отсутствует → null (и тогда HAAP-модель откажет
+        /// внятно — профиль обязателен, у неё нет скалярных значений).
+        /// Формат зеркалит `haap_columns` Rust: строки = нейроны, колонки =
+        /// HaapCol в порядке enum.
+        static float[] ParseHaapProfile(Dictionary<string, object> root, int n)
+        {
+            if (!root.TryGetValue("haapProfile", out var profileObj) || profileObj == null)
+                return null;
+            var rows = Json.Arr(profileObj);
+            if (rows.Count != n)
+                throw new FormatException(
+                    $"haapProfile: строк {rows.Count}, а нейронов {n} — профиль " +
+                    $"обязан покрывать каждого (архетип региона × гены)");
+            var cols = new float[n * HaapCols.N];
+            for (int i = 0; i < n; i++)
+            {
+                var row = Json.Arr(rows[i]);
+                if (row.Count != HaapCols.N)
+                    throw new FormatException(
+                        $"haapProfile[{i}]: колонок {row.Count}, а нужно {HaapCols.N} " +
+                        $"(порядок HaapCol: dt, invCm, g_l, e_l, g_m, e_k, g_h, e_h, " +
+                        $"invTauU, invTauH, vHalfU, kU, vHalfH, kH, vThresh, vReset, deltaU)");
+                for (int c = 0; c < HaapCols.N; c++)
+                    cols[i * HaapCols.N + c] = Json.F(row[c]);
+            }
+            return cols;
+        }
 
         public int RegionOf(int neuron) => _regionOf[neuron];
 

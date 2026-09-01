@@ -33,6 +33,11 @@ namespace Dioma.Spikes
         /// который читает плоские float в job-структуру.
         public NeuronModel Model;
         public NeuronParams Neuron;
+
+        /// Per-neuron параметры HAAP: n × HaapCols.N, строка на нейрон
+        /// (архетип региона × гены каналов). Заполняется только для
+        /// Model == Haap; остальные модели читают общий Neuron.
+        public float[] HaapProfile;
     }
 
     /// Вычислитель мембраны. Спайки возвращаются ИСТОРИЕЙ за тик, а не по

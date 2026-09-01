@@ -50,10 +50,15 @@ namespace Dioma.Body
         /// (RewardNow). Отложенная награда нужна там, где результат виден
         /// не в тот же тик.
         public readonly bool Delayed;
+        /// Через D1/D2-следы (DiomaBrain.RewardPathed): награда читает
+        /// прямой след, наказание — косвенный, и строит НЕ-действие, а не
+        /// стирает действие. Перенос R-STDP из BrainCog BDM-SNN. Требует
+        /// EnablePathTraces у мозга (вид включает его сам).
+        public readonly bool Pathed;
 
         public RewardRule(string name, RewardTrigger trigger, float dopamine,
             string[] channels = null, float threshold = 0f, bool proportional = false,
-            bool costsGlucose = false, bool delayed = false)
+            bool costsGlucose = false, bool delayed = false, bool pathed = false)
         {
             Name = name;
             Trigger = trigger;
@@ -63,6 +68,7 @@ namespace Dioma.Body
             Proportional = proportional;
             CostsGlucose = costsGlucose;
             Delayed = delayed;
+            Pathed = pathed;
         }
 
         /// Награда за еду: платит глюкозой и отложена (эталон Creature).
@@ -73,6 +79,13 @@ namespace Dioma.Body
         /// Наказание удара: сразу и без оплаты глюкозой.
         public static RewardRule ForCollision(float dopamine) =>
             new RewardRule("wall", RewardTrigger.Blocked, dopamine);
+
+        /// Наказание удара через КОСВЕННЫЙ путь (D2): строит НЕ-действие
+        /// «не плыви в стену» вместо стирания «плыви». Перенос семантики
+        /// базальных ганглиев BDM-SNN.
+        public static RewardRule ForCollisionPathed(float dopamine) =>
+            new RewardRule("wall-pathed", RewardTrigger.Blocked, dopamine,
+                pathed: true);
 
         /// Облегчение: максимум по каналам упал — награда пропорциональна
         /// падению. Награждается ИМЕННО тот маневр: его след ещё горячий.

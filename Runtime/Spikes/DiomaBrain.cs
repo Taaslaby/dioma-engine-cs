@@ -73,6 +73,9 @@ namespace Dioma.Spikes
         /// Долговременный снимок весов (эталон Болдуина); null до MemorySnapshot.
         float[] _memoryLt;
         readonly List<KeyValuePair<int, float>> _pending = new List<KeyValuePair<int, float>>();
+        // Отложенные D1/D2-награды: долги другого механизма — не смешивать
+        // с _pending (порядок применения и семантика разные).
+        readonly List<KeyValuePair<int, float>> _pendingPathed = new List<KeyValuePair<int, float>>();
         // ── D1/D2-следы (порт R-STDP из BrainCog BDM-SNN) ──
         // Тень eligibility с ДРУГИМ затуханием: прямой путь (D1) помнит
         // коротко, косвенный (D2) — дольше. Награда с выбором пути кладёт
@@ -598,6 +601,21 @@ namespace Dioma.Spikes
                 _stepCount % ((long)_homeoEveryTicks * StepsPerTick) == 0)
                 Normalize();
 
+            if (_pendingPathed.Count > 0)
+            {
+                float duePathed = 0f;
+                var keepP = new List<KeyValuePair<int, float>>();
+                foreach (var kv in _pendingPathed)
+                {
+                    if (_stepCount >= kv.Key) duePathed += kv.Value;
+                    else keepP.Add(kv);
+                }
+                _pendingPathed.Clear();
+                _pendingPathed.AddRange(keepP);
+                if (duePathed != 0f)
+                    RewardPathed(duePathed);
+            }
+
             if (_pending.Count == 0)
                 return;
 
@@ -622,6 +640,16 @@ namespace Dioma.Spikes
         public void ScheduleReward(float dopamine) =>
             _pending.Add(new KeyValuePair<int, float>(
                 (int)(_stepCount + StepsPerTick * _rewardDelayTicks), dopamine));
+
+        /// Отложенная награда через D1/D2-следы (см. RewardPathed).
+        /// Память следов ленива: SchedulePathed включает их — правило
+        /// вида не должно падать от порядка вызовов.
+        public void SchedulePathed(float dopamine)
+        {
+            EnablePathTraces();
+            _pendingPathed.Add(new KeyValuePair<int, float>(
+                (int)(_stepCount + StepsPerTick * _rewardDelayTicks), dopamine));
+        }
 
         public void RewardNow(float dopamine)
         {

@@ -74,6 +74,15 @@ namespace Dioma.Body
                 _poolEnd[k] = binding.PoolEnd[p];
             }
 
+            // Правило с Pathed требует теней D1/D2 — включаем их здесь,
+            // чтобы вид не зависел от порядка инициализации: арена без
+            // pathed-правил памяти не платит (ленивость сохранена).
+            bool anyPathed = false;
+            for (int r = 0; r < Species.Rewards.Count; r++)
+                if (Species.Rewards[r].Pathed) { anyPathed = true; break; }
+            if (anyPathed)
+                Brain.EnablePathTraces();
+
             // Наследство: выученные родителем веса поверх выращенной топологии.
             // У выращенного потомка топология своя, и длины не совпадают —
             // тогда веса теряются. Это осознанная цена морфогенеза (геном
@@ -273,7 +282,14 @@ namespace Dioma.Body
                         continue;
                     dopamine *= Blood.PlasticityBudget();
                 }
-                if (rule.Delayed) Brain.ScheduleReward(dopamine);
+                // Путь правила: Pathed-награды идут через D1/D2-следы
+                // (наказание строит НЕ-действие), прочие — как раньше.
+                if (rule.Pathed)
+                {
+                    if (rule.Delayed) Brain.SchedulePathed(dopamine);
+                    else Brain.RewardPathed(dopamine);
+                }
+                else if (rule.Delayed) Brain.ScheduleReward(dopamine);
                 else Brain.RewardNow(dopamine);
             }
         }
@@ -298,7 +314,10 @@ namespace Dioma.Body
                 if (rule.Trigger != RewardTrigger.Blocked) continue;
                 // Боль НЕ платит глюкозой: наказание должно работать и у
                 // голодного, иначе умирающий не учится не биться.
-                Brain.RewardNow(rule.Dopamine);
+                // Pathed-вариант (BDM-SNN): наказание через КОСВЕННЫЙ
+                // след строит «не плыви в стену», не стирая «плыви».
+                if (rule.Pathed) Brain.RewardPathed(rule.Dopamine);
+                else Brain.RewardNow(rule.Dopamine);
             }
         }
 

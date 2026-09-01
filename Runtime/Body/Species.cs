@@ -87,7 +87,9 @@ namespace Dioma.Body
             .Actuate(Actuator.Sum(Drive, new[] { "tail" }, 1f / 600f))
             .Actuate(Actuator.Ingest(Eat, FoodNear))
             .Reward(RewardRule.ForEating(Creature.EatDopamine))
-            .Reward(RewardRule.ForCollision(Creature.WallDopamine))
+            // Стена — через КОСВЕННЫЙ путь (D2): строит «не плыви в стену»,
+            // не стирая «плыви к еде». A/B-замер в EvolveSmoke держит.
+            .Reward(RewardRule.ForCollisionPathed(Creature.WallDopamine))
             // Награда хвосту: запах усилился — значит подплыли. Без неё новый
             // орган остался бы шумом, который STDP нечем закрепить.
             .Reward(RewardRule.ForApproach(0.3f, 0.02f, SmellLeft, SmellRight))

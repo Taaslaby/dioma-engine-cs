@@ -55,6 +55,14 @@ class Program
                 return TaasCheck.Run(new string[0]);
             case "s2b":
                 return Sardna2Brain.Run(new string[0]);
+            case "bench1k":
+                return BenchSardna1k();
+            case "s2b1k":
+                return Sardna2Brain.Run(new[]
+                {
+                    @"D:\Проекты\asm_engines\sardaanaCM\experiments\sardna_ultra\generated\flywire_10k_n1000_t0_85.taas",
+                    @"D:\Проекты\asm_engines\sardaanaCM\experiments\sardna_ultra\generated\flywire_1000_dioma.json",
+                });
             case "all":
                 return All();
             default:
@@ -85,6 +93,46 @@ class Program
             ? $"[all] {stages.Length}/{stages.Length} PASS"
             : $"[all] FAIL: {string.Join(", ", failed)}");
         return failed.Count == 0 ? 0 : 1;
+    }
+
+    /// Замер Sardna-мозга на 1000 нейронов (flywire_10k_n1000, конвертер
+    /// s2b): мс/тик против stage-C 760 — линейность или надрыв.
+    static int BenchSardna1k()
+    {
+        string path = System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)!,
+            "..", "..", "..", "..", "..",
+            "sardaanaCM", "experiments", "sardna_ultra", "generated",
+            "flywire_1000_dioma.json");
+        // Подъём от bin/Release/net8.0 до dioma-engine/../asm_engines не
+        // сходится в один корень: сид тут лежит на другом диске. Прямой
+        // абсолютный путь, но собранный по кускам — без вербатим-экранов,
+        // которые покорёжил heredoc.
+        path = "D:" + System.IO.Path.DirectorySeparatorChar + "Проекты" +
+               System.IO.Path.DirectorySeparatorChar + "asm_engines" +
+               System.IO.Path.DirectorySeparatorChar + "sardaanaCM" +
+               System.IO.Path.DirectorySeparatorChar + "experiments" +
+               System.IO.Path.DirectorySeparatorChar + "sardna_ultra" +
+               System.IO.Path.DirectorySeparatorChar + "generated" +
+               System.IO.Path.DirectorySeparatorChar + "flywire_1000_dioma.json";
+        string json = System.IO.File.ReadAllText(path);
+        int ticks = 200;
+        using var brain = DiomaBrain.FromJson(json);
+        var ext = new float[brain.N];
+        // Тонический ток в сенсоры — рабочий режим (не тишина, не эпилепсия).
+        int sl = brain.FindRegion("SL"), sr = brain.FindRegion("SR");
+        for (int i = brain.Regions[sl].Start; i < brain.Regions[sl].End; i++) ext[i] = 0.6f;
+        for (int i = brain.Regions[sr].Start; i < brain.Regions[sr].End; i++) ext[i] = 0.6f;
+        for (int t = 0; t < 20; t++) brain.Tick(ext);   // JIT-прогрев
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long spikes = 0;
+        for (int t = 0; t < ticks; t++) spikes += brain.Tick(ext);
+        sw.Stop();
+        Console.WriteLine($"[bench1k] flywire-1000: {brain.N} нейронов, " +
+            $"{brain.SynapseCount} синапсов, {sw.Elapsed.TotalMilliseconds / ticks:F2} мс/тик, " +
+            $"спайков/тик {spikes / ticks}");
+        Console.WriteLine("[bench1k] сравнение: stage-C 760 = 2.13-2.18 мс/тик (alpha-lif)");
+        return 0;
     }
 
     /// Замер скорости моделей мембраны на ОДНОЙ топологии: эталонный

@@ -21,7 +21,9 @@ using Dioma.Spikes;
 
 class Sardna2Brain
 {
-    const int WantSense = 20;   // как SL/SR рыбки (20+20)
+    // Сенсоров: у маленьких мозгов — рыбочьи 20+20, у больших (n>256) —
+    // 8% сети (у 1000 = 80+80: толпа реле не съедает роль слушателей).
+    static int WantSenseOf(int n) => n <= 256 ? 20 : Math.Max(20, (int)(n * 0.08));
 
     public static int Run(string[] args)
     {
@@ -49,8 +51,9 @@ class Sardna2Brain
         var inhib = Enumerable.Range(0, n).Where(i => nt[i] < 0).ToArray();
         var excit = Enumerable.Range(0, n).Where(i => nt[i] >= 0).ToArray();
 
+        int wantSense = WantSenseOf(n);
         var sensors = excit.OrderBy(i => inDeg[i]).ThenBy(i => outDeg[i])
-                           .Take(WantSense * 2).ToArray();
+                           .Take(wantSense * 2).ToArray();
         var senseSet = new HashSet<int>(sensors);
         var motors = excit.Where(i => !senseSet.Contains(i))
                           .OrderByDescending(i => outDeg[i])
@@ -59,8 +62,8 @@ class Sardna2Brain
 
         // SL — первые WantSense, SR — следующие (детерминизм: по индексу)
         Array.Sort(sensors);
-        var sl = sensors.Take(WantSense).ToArray();
-        var sr = sensors.Skip(WantSense).Take(WantSense).ToArray();
+        var sl = sensors.Take(wantSense).ToArray();
+        var sr = sensors.Skip(wantSense).Take(wantSense).ToArray();
         // Три моторных блока ровными третями: TAIL не должен остаться пустым
         // (первый прогон: n/4 моторов / 2 половины = TAIL 0 — FAIL).
         Array.Sort(motors);

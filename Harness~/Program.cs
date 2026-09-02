@@ -53,6 +53,8 @@ class Program
                 return BenchHaap();
             case "taas2":
                 return TaasCheck.Run(new string[0]);
+            case "s2b":
+                return Sardna2Brain.Run(new string[0]);
             case "all":
                 return All();
             default:

@@ -19,5 +19,6 @@
     <Compile Include="Program.cs" />
     <Compile Include="taascheck.cs" />
     <Compile Include="sardna2brain.cs" />
+    <Compile Include="patternbox.cs" />
   </ItemGroup>
 </Project>

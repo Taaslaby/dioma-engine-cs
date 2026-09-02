@@ -55,6 +55,8 @@ class Program
                 return TaasCheck.Run(new string[0]);
             case "s2b":
                 return Sardna2Brain.Run(new string[0]);
+            case "pattern":
+                return PatternBox.Run(new string[0]);
             case "bench1k":
                 return BenchSardna1k();
             case "s2b1k":

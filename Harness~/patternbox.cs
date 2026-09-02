@@ -159,20 +159,29 @@ class PatternBox
             // училась на ~95 кредитах).
             double surprise = last - predicted;
             _brain!.EnablePathTraces();
-            if (IsPattern(seq) && surprise > 0 && last > 0)
+            // ПОРЯДОК-ЧУВСТВИТЕЛЬНЫЙ гейт: наказание срабатывает только
+            // когда история HC не паттерн — сырому «громкому хвосту» DD
+            // (который у UUDD тоже есть) прощение не нужно: наказание
+            // обязано отличать UUDD от UDDD, а не тихий хвост от громкого.
+            // Носитель порядка — WM (слоots уже записали последовательность).
+            bool patternHistory = IsPattern(seq);
+            if (patternHistory && surprise > 0 && last > 0)
             {
-                // Симметричный сигнал: сверх-прогнозный отклик на UUDD
-                // — ДОБРО; на чужом порядке — ЗЛО (строит НЕ-действие,
-                // D2-путь BDM-SNN). Мозг учится: избыток отклика живёт
-                // ТОЛЬКО на паттерне.
-                _brain.RewardPathed(+RewardDopamine);
+                // Кредит ПРОПОРЦИОНАЛЕН превышению прогноза: сильный
+                // сюрприз — сильная награда (плоская ставка не
+                // дифференцировала паттерны внутри 95 кредитов).
+                float mag = (float)Math.Min(surprise / Math.Max(predicted, 1.0), 3.0);
+                _brain.RewardPathed(RewardDopamine * mag);
                 rewards++;
             }
-            else if (!IsPattern(seq) && surprise > 0)
+            else if (!patternHistory && surprise > 0)
             {
+                // На чужом порядке — ЗЛО (D2, строит НЕ-действие).
                 _brain.RewardPathed(-RewardDopamine * 0.5f);
                 punishments++;
             }
+            // ТИШИНА не наказывается: surprise<=0 на паттерне — просто
+            // слабый отклик, не ошибка порядка.
             // зазор: eligibility затухает, попытки независимы
             var quiet = new float[_brain!.N];
             for (int g = 0; g < Gap; g++)
@@ -290,11 +299,16 @@ class PatternBox
         int dOnly = ProbeAvg(new[] { 1 }, 20);
         Console.WriteLine($"[pattern] одиночные: U={uOnly} D={dOnly} " +
                           $"(различимость {Math.Max(uOnly, dOnly) / (double)Math.Max(1, Math.Min(uOnly, dOnly)):F2}×)");
-        double ratio = others > 0 ? target / others : double.PositiveInfinity;
-        Console.WriteLine($"[pattern] избирательность ×{ratio:F2} " +
-                          (ratio > 1.15
-                              ? "— ПОСЛЕДОВАТЕЛЬНОСТЬ ВЫУЧЕНА (не отдельные стимулы)"
-                              : "— паттерн от компонентов не отличим"));
+        // Вердикт — по НОРМИРОВАННОЙ метрике (снимает U/D-асимметрию
+        // топологии: D-путь к мотору в 6.5× сильнее — сырые спайки
+        // паттерна никогда его не перебьют, рост живёт над прогнозом).
+        double normRatio = othersN > 0 ? uu / othersN : double.PositiveInfinity;
+        double rawRatio = others > 0 ? target / others : double.PositiveInfinity;
+        Console.WriteLine($"[pattern] сырая ×{rawRatio:F2} (диагностика), " +
+                          $"нормированная ×{normRatio:F2} (вердикт)");
+        Console.WriteLine(normRatio > 1.15
+            ? "[pattern] ПОСЛЕДОВАТЕЛЬНОСТЬ ВЫУЧЕНА (над прогнозом одиночных)"
+            : "[pattern] паттерн от компонентов не отличим");
         foreach (var g in history) Console.WriteLine($"  {g}");
         return 0;
     }

@@ -45,6 +45,16 @@ class PatternBox
         _motor = _brain.FindRegion("TAIL");
         var rng = new XorShift(777);
 
+        // ── Гиппокамп: WM-след порядка стимулов ──
+        // Запись: каждый стимул — 2-мерный вектор (U/D) в слот.
+        // Чтение: буфер через GNW сжимается и добавляется в I-нейроны:
+        // моторный тик видит «что было» рядом с «что есть».
+        var wm = new Dioma.Body.WorkingMemory(slots: 4, dim: 2, seed: 9001);
+        int iR = _brain!.FindRegion("I");
+        var gnw = new Dioma.Body.GlobalWorkspace(
+            nNeurons: _brain.Regions[iR].End - _brain.Regions[iR].Start,
+            workspaceSize: 8, seed: 9002);
+
         // Моторный отклик: сумма спайков моторного пула за окно ответа.
         int MotorSpikes(float[] ext, int steps)
         {
@@ -72,10 +82,34 @@ class PatternBox
                 for (int i = _brain!.Regions[region].Start;
                      i < _brain.Regions[region].End; i++)
                     _ext[i] = Stim;
+
+                // HC-путь: slot-major развёртка с ВЕСОМ ВОЗРАСТА —
+                // порядок живёт в (слот, возраст): UUDD и UDUD пишут
+                // разные слоты в одинаковые возрасты. Развёртка по
+                // кругу (прошлая) вымывала порядок в сумму.
+                wm.Store(s == 0 ? new float[] { 1f, 0f } : new float[] { 0f, 1f });
+                var hc = wm.RecallAll();
+                int iStart = _brain.Regions[iR].Start;
+                int iCount = _brain.Regions[iR].End - iStart;
+                var hcFeed = new float[iCount];
+                for (int i = 0; i < iCount; i++)
+                {
+                    int slot = i % wm.Slots;
+                    int comp = (i / wm.Slots) % wm.Dim;
+                    // возраст слота: чем старше, тем тише вклад.
+                    float ageW = 1f / (1f + (float)wm.SlotAge(slot));
+                    hcFeed[i] = hc[slot * wm.Dim + comp] * ageW * 4f;
+                }
+                gnw.Forward(hcFeed);
+                for (int i = 0; i < iCount; i++)
+                    _ext[iStart + i] += hcFeed[i] * 0.5f;
+
                 fired += MotorSpikes(_ext, 1);
                 Array.Clear(_ext, 0, _ext.Length);
                 _ = region;
             }
+            // Межстимульная динамика памяти: след затухает, но живёт.
+            wm.Tick();
             return (fired, seq);
         }
 
@@ -102,18 +136,22 @@ class PatternBox
             var (fired, _) = Play(seq);
             if (IsPattern(seq) && fired > 0)
             {
-                // D1-путь (R-STDP из BDM-SNN): дофамин домножает СЛЕД,
-                // который за 4-тик-паттерн копил вклад всех стимулов
-                // с затуханием 0.8^k. Голова паттерна (UU) жива в следе
-                // наравне с хвостом (DD) — RewardNow кредитовал бы
-                // только хвост (замер: избирательность 0.97).
+                // Награда через D1-след: eligibility всех тиков паттерна
+                // (включая HC-вход в I) копится в след с затуханием 0.8^k.
+                // Раньше не работал из-за неразличимого входа; с
+                // slot-major HC-входом порядок виден — след может
+                // закрепить путь 'HC-состояние→мотор'.
                 _brain!.EnablePathTraces();
                 _brain.RewardPathed(RewardDopamine);
                 rewards++;
             }
             // зазор: eligibility затухает, попытки независимы
             var quiet = new float[_brain!.N];
-            for (int g = 0; g < Gap; g++) _brain.Tick(quiet);
+            for (int g = 0; g < Gap; g++)
+            {
+                _brain.Tick(quiet);
+                wm.Tick();
+            }
             if (t % 100 == 0)
                 history.Add($"попытка {t}: наград {rewards}");
         }
@@ -156,6 +194,57 @@ class PatternBox
         int target = ProbeAvg(orders[0].seq, reps);
         double others = orders.Skip(1).Average(o => (double)ProbeAvg(o.seq, reps));
         Console.WriteLine($"[pattern] UUDD={target} против среднее-чужих={others:F1}");
+        // HC-различимость: hcFeed на последнем стимуле UUDD vs UDUD.
+        float[] FeedOf(int[] seq)
+        {
+            wm.Clear();
+            float[] feed = new float[0];
+            foreach (var s in seq)
+            {
+                wm.Store(s == 0 ? new float[] { 1f, 0f } : new float[] { 0f, 1f });
+                var hc = wm.RecallAll();
+                int iStart2 = _brain!.Regions[iR].Start;
+                int iCount2 = _brain.Regions[iR].End - iStart2;
+                feed = new float[iCount2];
+                for (int i = 0; i < iCount2; i++)
+                {
+                    int slot = i % wm.Slots;
+                    int comp = (i / wm.Slots) % wm.Dim;
+                    float ageW = 1f / (1f + (float)wm.SlotAge(slot));
+                    feed[i] = hc[slot * wm.Dim + comp] * ageW * 4f;
+                }
+            }
+            return feed;
+        }
+        // Проводка I→TAIL: есть ли у HC-входа путь к мотору вообще?
+        int iR3 = _brain!.FindRegion("I");
+        var brainVals = _brain.CsrValues();
+        int iS = _brain.Regions[iR3].Start, iE = _brain.Regions[iR3].End;
+        int tS = _brain.Regions[_motor].Start, tE = _brain.Regions[_motor].End;
+        int[,] pre2post = new int[1,1];
+        _ = pre2post;
+        // Считаем через CSR: для каждого I-нейрона входящие в TAIL.
+        int iToTail = 0;
+        var rp2 = _brain.GetType().GetField("_rowPtr",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        // проще: RegionPairWeight
+        double wIT = _brain.RegionPairWeight(iR3, _motor);
+        double wST = _brain.RegionPairWeight(_sl, _motor);
+        double wIT2 = _brain.RegionPairWeight(iR3, iR3);
+        Console.WriteLine($"[pattern] проводка: W(I→TAIL)={wIT:F1}, W(SL→TAIL)={wST:F1}, " +
+                          $"W(I→I)={wIT2:F1} — " +
+                          $"{(wIT > 0.01 ? "путь есть" : "ПУТИ НЕТ: HC-вход не доезжает")}");
+        var feedA = FeedOf(new[] { 0, 0, 1, 1 });
+        var feedB = FeedOf(new[] { 0, 1, 0, 1 });
+        double diff = 0, na = 0;
+        for (int i = 0; i < feedA.Length; i++)
+        {
+            diff += MathF.Abs(feedA[i] - feedB[i]);
+            na += feedA[i] * feedA[i];
+        }
+        Console.WriteLine($"[pattern] HC-вход различим: |UUDD-UDUD|={diff:F3} " +
+                          $"при норме {MathF.Sqrt((float)na):F3} " +
+                          $"({(diff / Math.Max(na, 1e-9) > 0.15 ? "РАЗЛИЧИМ" : "порядок вымывается")})");
         // Базовая различимость: один стимул против другого (без порядка).
         int uOnly = ProbeAvg(new[] { 0 }, 20);
         int dOnly = ProbeAvg(new[] { 1 }, 20);

@@ -16,9 +16,13 @@
     <Compile Include="..\Runtime\Bio\*.cs" />
     <Compile Include="..\Runtime\Body\*.cs" />
     <Compile Include="..\Runtime\World\*.cs" />
+    <!-- Прометей из соседнего репо: blockbrain собирает схемы блоками.
+         Те же исходники, что видит Unity (как Runtime движка). -->
+    <Compile Include="..\..\prometheus-unity\Runtime\Core\**\*.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="taascheck.cs" />
     <Compile Include="sardna2brain.cs" />
     <Compile Include="patternbox.cs" />
+    <Compile Include="blockbrain.cs" />
   </ItemGroup>
 </Project>

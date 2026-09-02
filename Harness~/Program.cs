@@ -51,6 +51,8 @@ class Program
                 return Arena();
             case "bench-haap":
                 return BenchHaap();
+            case "taas2":
+                return TaasCheck.Run(new string[0]);
             case "all":
                 return All();
             default:

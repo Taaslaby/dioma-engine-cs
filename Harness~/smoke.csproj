@@ -17,5 +17,6 @@
     <Compile Include="..\Runtime\Body\*.cs" />
     <Compile Include="..\Runtime\World\*.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="taascheck.cs" />
   </ItemGroup>
 </Project>

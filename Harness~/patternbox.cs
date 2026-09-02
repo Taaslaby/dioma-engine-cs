@@ -21,7 +21,10 @@ class PatternBox
     const int Trials = 400;
     const int Gap = 8;          // тиков тишины между попытами: eligibility
                                 // затухает, чужие попытки не кредитуются
-    const float Stim = 4f;      // ток стимула (как живость-проверка s2b)
+    const float Stim = 1.0f;    // ↓ с 4: при 4 мотор сатурирован базой
+                                // (763/734 спайков) и вклад HC-состояния
+                                // тонет; меньше ток — отклик пропорциональнее
+                                // входу, разница порядков различима
     const float RewardDopamine = 1f;
 
     static DiomaBrain? _brain;
@@ -49,7 +52,8 @@ class PatternBox
         // Запись: каждый стимул — 2-мерный вектор (U/D) в слот.
         // Чтение: буфер через GNW сжимается и добавляется в I-нейроны:
         // моторный тик видит «что было» рядом с «что есть».
-        var wm = new Dioma.Body.WorkingMemory(slots: 4, dim: 2, seed: 9001);
+        var wm = new Dioma.Body.WorkingMemory(slots: 4, dim: 2, seed: 9001)
+        { RecurrentGain = 0.1f, Decay = 0.95f };
         int iR = _brain!.FindRegion("I");
         var gnw = new Dioma.Body.GlobalWorkspace(
             nNeurons: _brain.Regions[iR].End - _brain.Regions[iR].Start,
@@ -101,8 +105,15 @@ class PatternBox
                     hcFeed[i] = hc[slot * wm.Dim + comp] * ageW * 4f;
                 }
                 gnw.Forward(hcFeed);
+                // Оба адреса: состояние памяти видно И кольцу I (усиление),
+                // И мотору напрямую (минуя эхо). Веса рассеяны: вклад HC в
+                // TAIL меньше вклада стимула, чтобы не подменять стимул.
+                int tStart = _brain.Regions[_motor].Start;
+                int tCount = _brain.Regions[_motor].End - tStart;
+                for (int i = 0; i < tCount && i < hcFeed.Length; i++)
+                    _ext[tStart + i] += hcFeed[i] * 0.3f;
                 for (int i = 0; i < iCount; i++)
-                    _ext[iStart + i] += hcFeed[i] * 0.5f;
+                    _ext[iStart + i] += hcFeed[i] * 0.4f;
 
                 fired += MotorSpikes(_ext, 1);
                 Array.Clear(_ext, 0, _ext.Length);
@@ -234,6 +245,18 @@ class PatternBox
         Console.WriteLine($"[pattern] проводка: W(I→TAIL)={wIT:F1}, W(SL→TAIL)={wST:F1}, " +
                           $"W(I→I)={wIT2:F1} — " +
                           $"{(wIT > 0.01 ? "путь есть" : "ПУТИ НЕТ: HC-вход не доезжает")}");
+        // Нормировка на U/D-асимметрию: прогноз отклика по одиночным
+        // базам. selectivity = отклик(порядок) / прогноз(порядок) —
+        // чистый вклад ПОСЛЕДОВАТЕЛЬНОСТИ без баланса U/D.
+        // Базы: одиночный стимул в позиции k даёт вклад single[s].
+        var single = new[] { ProbeAvg(new[] { 0 }, 10), ProbeAvg(new[] { 1 }, 10) };
+        Console.WriteLine($"[pattern] базы: U0={single[0]} D0={single[1]}");
+        Func<int[], double> Predicted = seq => seq.Sum(s => (double)single[s]) / 2.0;
+        Console.WriteLine("[pattern] нормированная избирательность:");
+        double uu = target / Predicted(orders[0].seq);
+        double othersN = orders.Skip(1).Average(o => ProbeAvg(o.seq, reps) / Predicted(o.seq));
+        Console.WriteLine($"[pattern] UUDD={uu:F3} против чужих={othersN:F3} " +
+                          $"(нормировано на прогноз одиночных)");
         var feedA = FeedOf(new[] { 0, 0, 1, 1 });
         var feedB = FeedOf(new[] { 0, 1, 0, 1 });
         double diff = 0, na = 0;

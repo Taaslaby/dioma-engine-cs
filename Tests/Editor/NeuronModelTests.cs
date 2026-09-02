@@ -162,7 +162,7 @@ public class NeuronModelTests
         var ext = new float[layout.N];
         for (int i = 0; i < layout.N; i++) ext[i] = 0.12f;
         for (int i = layout.N / 4; i < layout.N / 3; i++) ext[i] = 5f;
-        var history = new int[brain.StepsPerTick * layout.N];
+        var history = new byte[brain.StepsPerTick * layout.N];
 
         for (int t = 0; t < 5; t++) kernel.Run(ext, brain.StepsPerTick, history);
         var sw = System.Diagnostics.Stopwatch.StartNew();

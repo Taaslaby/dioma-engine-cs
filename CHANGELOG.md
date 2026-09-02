@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.14.2] — 2026-09-02
+
+### Перфоманс: P0/P1 ядра + верхнеуровневое API
+
+Оптимизационный проход по горячему пути (PERFORMANCE_CHECKLIST.md):
+
+- in-place compaction delayed rewards; `SyncWeights` no-op;
+- ring-буфер спайков без `Array.Copy`;
+- `NoteSpikes` считает спайки сам, история `int[] -> byte[]` с
+  read-only `SpikeHistoryView` поверх;
+- homeostasis — предвычисление; D1/D2 обновляются рядом с владельцем
+  eligibility без copy; dopamine слит с первым проходом Normalize.
+- Итог: stage-C parity 1,48 -> 1,06 мс/тик, arena 1,23 -> 0,16.
+
+API-гигиена (API_CHECKLIST.md), P0 закрыт:
+
+- `BrainBlueprint` — прямой `GrowResult -> DiomaBrain`, JSON больше не
+  нужен в runtime-рождении (остался для ассетов/golden/tooling);
+- `CreatureStateSnapshot` — единый снимок genome/brain/blood/lineage/RNG;
+- `IBrainDiagnostics` отделён от simulation API;
+- `Blood.Conc`/`Blood.Loci` скрыты за событийным API;
+- `BrainRecipe` принимает только фабрику владеемого backend.
+
 ## [0.14.1] — 2026-09-02
 
 ### Вид Predator — хищник-ученик (акт 2 «Пруда»)

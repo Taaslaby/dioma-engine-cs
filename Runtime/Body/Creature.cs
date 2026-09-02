@@ -86,7 +86,7 @@ namespace Dioma.Body
             // переданная кровь — это либо загруженное сохранение, либо
             // подготовленное состояние, и перетирать его нельзя.
             if (blood == null)
-                Blood.Conc[Chem.Hunger] = NewbornHunger;
+                Blood.SetConcentration(Chem.Hunger, NewbornHunger);
             _ext = new float[brain.N];
             _rSl = brain.FindRegion("SL");
             _rSr = brain.FindRegion("SR");
@@ -165,9 +165,9 @@ namespace Dioma.Body
             LastSpikes = spikes;
 
             // ── 3. Тело: моторная работа и дефицит глюкозы в кровь ──
-            Blood.Loci[Locus.RateMotor] = mlSum + mrSum;
-            Blood.Loci[Locus.GlucoseDeficit] =
-                MathF.Max(Bio.Blood.GlucoseAbundant - Blood.Conc[Chem.Glucose], 0f);
+            Blood.SetDriverLocus(Locus.RateMotor, mlSum + mrSum);
+            Blood.SetDriverLocus(Locus.GlucoseDeficit,
+                MathF.Max(Bio.Blood.GlucoseAbundant - Blood.Conc[Chem.Glucose], 0f));
 
             if (sense.WallHit)
                 HitWall();

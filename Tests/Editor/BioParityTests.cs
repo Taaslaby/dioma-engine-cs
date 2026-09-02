@@ -64,7 +64,7 @@ public class BioParityTests
         Assert.Greater(golden.Count, 0, "след биохимии пуст");
 
         var blood = Blood.Creature();
-        blood.Conc[Chem.Hunger] = 120.0f; // ARENA_NEWBORN_HUNGER, как в эталоне
+        blood.SetConcentration(Chem.Hunger, 120.0f); // ARENA_NEWBORN_HUNGER, как в эталоне
 
         double maxConcErr = 0, maxLociErr = 0, maxParamErr = 0;
         int firstMismatch = -1, badPaid = 0, badWants = 0;
@@ -79,9 +79,9 @@ public class BioParityTests
         {
             var g = golden[t];
 
-            blood.Loci[Locus.RateMotor] = g.RateMotor;
-            blood.Loci[Locus.GlucoseDeficit] =
-                MathF.Max(Blood.GlucoseAbundant - blood.Conc[Chem.Glucose], 0f);
+            blood.SetDriverLocus(Locus.RateMotor, g.RateMotor);
+            blood.SetDriverLocus(Locus.GlucoseDeficit,
+                MathF.Max(Blood.GlucoseAbundant - blood.Conc[Chem.Glucose], 0f));
             if (g.Wall) blood.BumpWall();
             if (g.Ate) blood.IngestFood(60.0f);
             blood.Update();
@@ -153,7 +153,7 @@ public class BioParityTests
         var blood = Blood.Creature();
         for (int i = 0; i < 60; i++)
         {
-            blood.Loci[Locus.RateMotor] = 400f;
+            blood.SetDriverLocus(Locus.RateMotor, 400f);
             blood.Update();
         }
         Assert.GreaterOrEqual(blood.Conc[Chem.Fatigue], 200f,
@@ -164,8 +164,8 @@ public class BioParityTests
     public void DriveLociSurviveReceptorReset()
     {
         var blood = Blood.Creature();
-        blood.Loci[Locus.RateMotor] = 123f;
-        blood.Loci[Locus.GlucoseDeficit] = 45f;
+        blood.SetDriverLocus(Locus.RateMotor, 123f);
+        blood.SetDriverLocus(Locus.GlucoseDeficit, 45f);
         blood.Update();
         Assert.AreEqual(123f, blood.Loci[Locus.RateMotor], 1e-3f);
         Assert.AreEqual(45f, blood.Loci[Locus.GlucoseDeficit], 1e-3f);
@@ -178,7 +178,7 @@ public class BioParityTests
         float before = blood.Conc[Chem.Glucose];
         Assert.IsTrue(blood.PayForPlasticity(1.0f));
         Assert.Less(blood.Conc[Chem.Glucose], before, "обучение должно стоить глюкозы");
-        blood.Conc[Chem.Glucose] = 0f;
+        blood.SetConcentration(Chem.Glucose, 0f);
         Assert.IsFalse(blood.PayForPlasticity(1.0f), "с нулевой глюкозой платить нечем");
     }
 
@@ -186,9 +186,9 @@ public class BioParityTests
     public void PlasticityBudgetRespectsHormones()
     {
         var calm = Blood.Creature();
-        calm.Conc[Chem.Acetylcholine] = 60f;
+        calm.SetConcentration(Chem.Acetylcholine, 60f);
         var stressed = Blood.Creature();
-        stressed.Conc[Chem.Cortisol] = 120f;
+        stressed.SetConcentration(Chem.Cortisol, 120f);
         Assert.Greater(calm.PlasticityBudget(), stressed.PlasticityBudget(),
             "стресс должен глушить пластичность");
         Assert.That(stressed.PlasticityBudget(), Is.InRange(0.27f, 1.01f));
@@ -198,7 +198,7 @@ public class BioParityTests
     public void SleepCapsGlucoseBelowAbundance()
     {
         var blood = Blood.Creature();
-        blood.Conc[Chem.Glucose] = 200f;
+        blood.SetConcentration(Chem.Glucose, 200f);
         blood.Sleep();
         // Кап 120 ниже порога 150: сон не кормит, голод продолжит расти.
         Assert.AreEqual(Blood.SleepGlucoseCap, blood.Conc[Chem.Glucose], 1e-3f);

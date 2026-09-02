@@ -28,7 +28,8 @@ namespace Dioma.Spikes.Burst
         public string Name => "burst";
 
         readonly int _n, _ringSize;
-        NativeArray<int> _rowPtr, _colIdx, _history, _prevFired;
+        NativeArray<int> _rowPtr, _colIdx, _prevFired;
+        NativeArray<byte> _history;
         NativeArray<float> _values, _nt, _v, _g, _refrCnt, _ring, _ext;
         NativeArray<int> _prevFiredCount;
         readonly SpikeLayout _l;
@@ -82,13 +83,13 @@ namespace Dioma.Spikes.Burst
             for (int i = 0; i < n; i++) into[i] = _v[i];
         }
 
-        public void Run(float[] ext, int steps, int[] history)
+        public void Run(float[] ext, int steps, byte[] history)
         {
             int needed = steps * _n;
             if (_historyCapacity < needed)
             {
                 if (_history.IsCreated) _history.Dispose();
-                _history = new NativeArray<int>(needed, Allocator.Persistent);
+                _history = new NativeArray<byte>(needed, Allocator.Persistent);
                 _historyCapacity = needed;
             }
             _ext.CopyFrom(ext);
@@ -120,7 +121,7 @@ namespace Dioma.Spikes.Burst
             };
             job.Run();
             _ringPos = (_ringPos + steps) % _ringSize;
-            NativeArray<int>.Copy(_history, 0, history, 0, needed);
+            NativeArray<byte>.Copy(_history, 0, history, 0, needed);
         }
 
         public void Dispose()
@@ -156,7 +157,8 @@ namespace Dioma.Spikes.Burst
             [ReadOnly] public NativeArray<float> Ext;
 
             public NativeArray<float> V, G, RefrCnt, Ring;
-            public NativeArray<int> History, PrevFired, PrevFiredCount;
+            public NativeArray<byte> History;
+            public NativeArray<int> PrevFired, PrevFiredCount;
 
             public void Execute()
             {
@@ -180,7 +182,7 @@ namespace Dioma.Spikes.Burst
                         float vNew = TimeFactor * integrand + V[i];
 
                         bool spike = vNew > VThresh; // порог строгий
-                        History[at + i] = spike ? 1 : 0;
+                        History[at + i] = spike ? (byte)1 : (byte)0;
                         V[i] = spike ? VReset : vNew;
 
                         float gNew = SynDecay * gOld + delayed;

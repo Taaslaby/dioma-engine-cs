@@ -76,9 +76,10 @@ namespace Dioma.Spikes
 
         /// Один подшаг. `ext` — внешний ток, `input` — вход, пришедший по
         /// синапсам (уже с учётом аксонной задержки), `history[at + i]` — куда
-        /// писать спайк нейрона `i` (0/1).
-        void Substep(int n, float[] state, float[] ext, float[] input,
-                     int[] history, int at);
+        /// писать спайк нейрона `i` (0/1). Индексы стрелявших записываются
+        /// по возрастанию в `fired`; возвращается их количество.
+        int Substep(int n, float[] state, float[] ext, float[] input,
+                    byte[] history, int at, int[] fired);
     }
 
     /// Alpha-LIF — эталон. Порт `run_lif_alpha` (pillars-connectome).
@@ -114,17 +115,16 @@ namespace Dioma.Spikes
             }
         }
 
-        public void Substep(int n, float[] state, float[] ext, float[] input,
-                            int[] history, int at)
+        public int Substep(int n, float[] state, float[] ext, float[] input,
+                           byte[] history, int at, int[] fired)
         {
-            // 1. Внешний ток — прямо в мембрану (voltage jump, как в эталоне).
-            for (int i = 0; i < n; i++)
-                state[i] += ext[i];
-
-            // 2. Шаг нейронов.
+            int firedCount = 0;
             for (int i = 0; i < n; i++)
             {
-                float v = state[i];
+                // Внешний ток — voltage jump до шага нейрона, как в
+                // эталоне. Локальный float сохраняет то же округление, но
+                // убирает отдельные write/read всего массива мембраны.
+                float v = state[i] + ext[i];
                 float gOld = state[n + i];
                 float refr = state[2 * n + i];
                 float delayed = refr >= _refrSteps ? input[i] : 0f;
@@ -133,13 +133,15 @@ namespace Dioma.Spikes
                 float vNew = _timeFactor * integrand + v;
 
                 bool spike = vNew > _vThresh;
-                history[at + i] = spike ? 1 : 0;
+                history[at + i] = spike ? (byte)1 : (byte)0;
+                if (spike) fired[firedCount++] = i;
                 state[i] = spike ? _vReset : vNew;
 
                 float gNew = _synDecay * gOld + delayed;
                 state[n + i] = spike ? 0f : gNew;
                 state[2 * n + i] = spike ? 0f : refr + 1f;
             }
+            return firedCount;
         }
     }
 
@@ -171,15 +173,13 @@ namespace Dioma.Spikes
             }
         }
 
-        public void Substep(int n, float[] state, float[] ext, float[] input,
-                            int[] history, int at)
+        public int Substep(int n, float[] state, float[] ext, float[] input,
+                           byte[] history, int at, int[] fired)
         {
-            for (int i = 0; i < n; i++)
-                state[i] += ext[i];
-
+            int firedCount = 0;
             for (int i = 0; i < n; i++)
             {
-                float v = state[i];
+                float v = state[i] + ext[i];
                 float refr = state[n + i];
                 // Рефрактерность гасит синаптический вход, но не утечку:
                 // мембрана продолжает сползать к покою.
@@ -187,10 +187,12 @@ namespace Dioma.Spikes
 
                 float vNew = _timeFactor * (drive - (v - _vRest)) + v;
                 bool spike = vNew > _vThresh;
-                history[at + i] = spike ? 1 : 0;
+                history[at + i] = spike ? (byte)1 : (byte)0;
+                if (spike) fired[firedCount++] = i;
                 state[i] = spike ? _vReset : vNew;
                 state[n + i] = spike ? 0f : refr + 1f;
             }
+            return firedCount;
         }
     }
 
@@ -225,9 +227,10 @@ namespace Dioma.Spikes
             }
         }
 
-        public void Substep(int n, float[] state, float[] ext, float[] input,
-                            int[] history, int at)
+        public int Substep(int n, float[] state, float[] ext, float[] input,
+                           byte[] history, int at, int[] fired)
         {
+            int firedCount = 0;
             for (int i = 0; i < n; i++)
             {
                 float trace = state[i];
@@ -237,10 +240,12 @@ namespace Dioma.Spikes
                 float traceNew = _kernelDecay * trace + drive;
                 // Порог считается от покоя: след — это отклонение от него.
                 bool spike = _vRest + traceNew > _vThresh;
-                history[at + i] = spike ? 1 : 0;
+                history[at + i] = spike ? (byte)1 : (byte)0;
+                if (spike) fired[firedCount++] = i;
                 state[i] = spike ? 0f : traceNew;
                 state[n + i] = spike ? 0f : refr + 1f;
             }
+            return firedCount;
         }
     }
 }

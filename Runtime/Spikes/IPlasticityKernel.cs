@@ -69,13 +69,24 @@ namespace Dioma.Spikes
 
         /// Подшаг: продвинуть зеркала следов и накопить статистику спайков.
         /// `history` — буфер спайков тика, `at` — смещение подшага.
-        void NoteSpikes(int[] history, int at, int row);
+        /// Возвращает число спайков строки, чтобы вызывающий не сканировал
+        /// ту же историю отдельным полным проходом.
+        int NoteSpikes(byte[] history, int at, int row);
+
+        /// Обработать полную историю одного тика и сразу применить STDP.
+        /// Возвращает суммарное число спайков. Это production-путь: кернел
+        /// может перенести историю в свою память один раз на весь тик.
+        int ProcessTick(byte[] history);
 
         /// Конец тика: один проход по синапсам — LTP/LTD/затухание.
         void Apply();
 
         /// Прочитать eligibility (нужно дофамину: Δw = lr·D·e).
         void ReadEligibility(float[] dst);
+
+        /// Обновить D1/D2-тени рядом с владельцем eligibility, не копируя
+        /// полный массив через публичную границу кернела.
+        void UpdatePathTraces(float[] d1, float[] d2, float d1Decay, float d2Decay);
 
         /// Обнулить eligibility целиком (ночь: окно обучения закрывается).
         void ClearEligibility();

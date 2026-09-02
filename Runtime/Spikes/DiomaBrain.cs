@@ -18,7 +18,7 @@ using System.Collections.Generic;
 
 namespace Dioma.Spikes
 {
-    public sealed class DiomaBrain : IDisposable
+    public sealed class DiomaBrain : IDisposable, IBrainDiagnostics
     {
         public sealed class Region
         {
@@ -32,6 +32,9 @@ namespace Dioma.Spikes
         public readonly int StepsPerTick;
         public readonly int N;
         public readonly Region[] Regions;
+        public IBrainDiagnostics Diagnostics => this;
+        public int NeuronCount => N;
+        IReadOnlyList<Region> IBrainDiagnostics.Regions => Regions;
 
         readonly float _tauRef, _tauM, _vRest, _vThresh, _vReset, _tauSyn, _tDelay;
         readonly float _tauPre, _tauPost, _tauE, _aLtp, _aLtd, _lr, _wMin, _wMax, _homeoRate;
@@ -43,6 +46,7 @@ namespace Dioma.Spikes
         readonly float[] _values;
         readonly int[] _preOf, _postOf;
         readonly bool[] _inhSyn;
+        readonly int[] _homeoSynapses;
         readonly float[] _targetInSum;
         readonly int[] _regionOf;
         readonly float[] _nt;
@@ -50,7 +54,8 @@ namespace Dioma.Spikes
         // ── Динамика мембраны: сменный кернел (см. ISpikeKernel) ──
         readonly ISpikeKernel _kernel;
         /// История спайков тика: StepsPerTick × N (0/1). Кернел пишет, пластичность читает.
-        readonly int[] _history;
+        readonly byte[] _history;
+        readonly IReadOnlyList<int> _historyView;
         /// Имя активного вычислителя мембраны («managed», «burst»).
         public string KernelName => _kernel.Name;
         readonly SpikeLayout _layout;
@@ -64,8 +69,6 @@ namespace Dioma.Spikes
         // ── Пластичность: сменный кернел (см. IPlasticityKernel) ──
         readonly IPlasticityKernel _plast;
         readonly float[] _elig;   // буфер чтения eligibility для дофамина
-        int _tickRow;
-        bool _tickActive;
         /// Имя активного вычислителя пластичности.
         public string PlasticityKernelName => _plast.Name;
         long _stepCount;
@@ -205,10 +208,15 @@ namespace Dioma.Spikes
                     _inhSyn[idx] = _nt[i] < 0.0f;
                 }
 
-            _targetInSum = new float[N];
+            var homeoSynapses = new List<int>();
             for (int idx = 0; idx < nSyn; idx++)
                 if (!_inhSyn[idx] && !_homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
-                    _targetInSum[_postOf[idx]] += _values[idx];
+                    homeoSynapses.Add(idx);
+            _homeoSynapses = homeoSynapses.ToArray();
+
+            _targetInSum = new float[N];
+            foreach (int idx in _homeoSynapses)
+                _targetInSum[_postOf[idx]] += _values[idx];
 
             // ── Модель мембраны: alpha-LIF по умолчанию ──
             // Поля `lif` читаются всегда: формат один на все модели, у каждой
@@ -250,7 +258,8 @@ namespace Dioma.Spikes
             };
             _layout = layout;
             _kernel = SpikeKernels.Create(kernelMode ?? SpikeKernels.Default, layout, _values);
-            _history = new int[StepsPerTick * N];
+            _history = new byte[StepsPerTick * N];
+            _historyView = new SpikeHistoryView(_history);
 
             // ── Пластичность: mean-field STDP в сменном кернеле ──
             // CSC-индекс входящих рёбер строится один раз: он нужен, чтобы
@@ -281,6 +290,15 @@ namespace Dioma.Spikes
         /// мембраны; по умолчанию — `SpikeKernels.Default`.
         public static DiomaBrain FromJson(string text, KernelMode? kernelMode = null) =>
             new DiomaBrain(Json.Parse(text) as Dictionary<string, object>, kernelMode);
+
+        /// Создать мозг из типизированного описания. Это путь рантайма для
+        /// выращенного коннектома: без JSON-строки и её обратного разбора.
+        public static DiomaBrain FromBlueprint(BrainBlueprint blueprint,
+            KernelMode? kernelMode = null)
+        {
+            if (blueprint == null) throw new ArgumentNullException(nameof(blueprint));
+            return new DiomaBrain(blueprint.ToObjectGraph(), kernelMode);
+        }
 
         /// Модель мембраны по имени из коннектома. Неизвестное имя — ошибка, а
         /// не молчаливый откат: файл, написанный под другую динамику, дал бы
@@ -375,9 +393,8 @@ namespace Dioma.Spikes
         public void SleepConsolidate(float alpha)
         {
             Array.Clear(_normSums, 0, N);
-            for (int idx = 0; idx < _values.Length; idx++)
-                if (!_inhSyn[idx] && !_homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
-                    _normSums[_postOf[idx]] += _values[idx];
+            foreach (int idx in _homeoSynapses)
+                _normSums[_postOf[idx]] += _values[idx];
             for (int i = 0; i < N; i++)
                 if (_normSums[i] > 1e-6f)
                     _targetInSum[i] += alpha * (_normSums[i] - _targetInSum[i]);
@@ -488,6 +505,16 @@ namespace Dioma.Spikes
             _kernel.SyncWeights(_values);
         }
 
+        /// Восстановить текущие и родовые веса persistence-снимка. Порядок
+        /// важен: сначала родовые, затем снимок Болдуина, потом текущие.
+        public void RestoreWeights(float[] current, float[] birth)
+        {
+            if (birth == null) throw new ArgumentNullException(nameof(birth));
+            SetCsrValues(birth);
+            MemorySnapshot();
+            SetCsrValues(current);
+        }
+
         // ── Тик мира: StepsPerTick подшагов + моторные суммы ──
         //
         // Мембрану считает кернел, пластичность/награды/гомеостаз — мы. Тик
@@ -510,7 +537,7 @@ namespace Dioma.Spikes
         /// История спайков последнего тика: `StepsPerTick × N`, элемент 0/1,
         /// подшаг `s` нейрон `i` → `[s * N + i]`. Внутренний буфер — читать
         /// сразу после `Tick`/`TickMotor`, не мутировать.
-        public IReadOnlyList<int> SpikeHistory => _history;
+        public IReadOnlyList<int> SpikeHistory => _historyView;
 
         /// Суммарный дофамин за последний тик: положительный — награда,
         /// отрицательный — наказание. Для растра подкрепления.
@@ -520,16 +547,15 @@ namespace Dioma.Spikes
         {
             LastDopamine = 0f;
             _kernel.Run(ext, StepsPerTick, _history);
-            long total = 0;
+            ProcessDueRewards(_stepCount); // delay=0: до пластичности нового тика
             int ml = 0, mr = 0;
             for (int s = 0; s < StepsPerTick; s++)
             {
                 int at = s * N;
                 for (int i = ml0; i < ml1; i++) ml += _history[at + i];
                 for (int i = mr0; i < mr1; i++) mr += _history[at + i];
-                for (int i = 0; i < N; i++) total += _history[at + i];
-                AfterSubstep(at);
             }
+            long total = FinishTick();
             return (ml, mr, total);
         }
 
@@ -550,8 +576,8 @@ namespace Dioma.Spikes
 
             LastDopamine = 0f;
             _kernel.Run(ext, StepsPerTick, _history);
+            ProcessDueRewards(_stepCount); // delay=0
             Array.Clear(sums, 0, sums.Length);
-            long total = 0;
             int np = starts.Length;
             for (int s = 0; s < StepsPerTick; s++)
             {
@@ -562,56 +588,32 @@ namespace Dioma.Spikes
                     for (int i = starts[p]; i < ends[p]; i++) acc += _history[at + i];
                     sums[p] = acc;
                 }
-                for (int i = 0; i < N; i++) total += _history[at + i];
-                AfterSubstep(at);
             }
-            return total;
+            return FinishTick();
         }
 
-        /// Пост-обработка подшага: следы STDP, счётчик, отложенные награды.
-        /// `at` — смещение подшага в истории спайков.
-        void AfterSubstep(int at)
+        /// Пластичность и bookkeeping на границе тика. Публичный API отдаёт
+        /// мембранному кернелу сразу весь тик, поэтому между подшагами никто
+        /// не может вклиниться и повторять эти проверки 100 раз не нужно.
+        int FinishTick()
         {
-            TickNoteSpikes(at);
-            PostSubstepTick();
-        }
-
-        // ── Тик-пластичность живёт в кернеле (mean-field STDP) ──
-
-        void TickNoteSpikes(int at)
-        {
-            _plast.NoteSpikes(_history, at, _tickRow);
-            _tickRow = (_tickRow + 1) % StepsPerTick;
-            _tickActive = true;
-        }
-
-        void TickPlasticityApply() => _plast.Apply();
-
-        void PostSubstepTick()
-        {
-            _stepCount++;
-
-            if (_tickActive && _stepCount % StepsPerTick == 0)
-            {
-                TickPlasticityApply();
-                UpdatePathTraces();
-            }
+            int total = _plast.ProcessTick(_history);
+            _stepCount += StepsPerTick;
+            UpdatePathTraces();
 
             if (_homeoEveryTicks > 0 &&
                 _stepCount % ((long)_homeoEveryTicks * StepsPerTick) == 0)
                 Normalize();
 
+            ProcessDueRewards(_stepCount);
+            return total;
+        }
+
+        void ProcessDueRewards(long step)
+        {
             if (_pendingPathed.Count > 0)
             {
-                float duePathed = 0f;
-                var keepP = new List<KeyValuePair<int, float>>();
-                foreach (var kv in _pendingPathed)
-                {
-                    if (_stepCount >= kv.Key) duePathed += kv.Value;
-                    else keepP.Add(kv);
-                }
-                _pendingPathed.Clear();
-                _pendingPathed.AddRange(keepP);
+                float duePathed = DrainDue(_pendingPathed, step);
                 if (duePathed != 0f)
                     RewardPathed(duePathed);
             }
@@ -619,20 +621,28 @@ namespace Dioma.Spikes
             if (_pending.Count == 0)
                 return;
 
-            float dueSum = 0f;
-            var keep = new List<KeyValuePair<int, float>>();
-            foreach (var kv in _pending)
-            {
-                if (_stepCount >= kv.Key) dueSum += kv.Value;
-                else keep.Add(kv);
-            }
-            _pending.Clear();
-            _pending.AddRange(keep);
+            float dueSum = DrainDue(_pending, step);
             if (dueSum != 0f)
-            {
                 ApplyDopamine(dueSum, _wMax);
-                Normalize();
+        }
+
+        /// Собрать созревшие награды и уплотнить список на месте. Порядок
+        /// суммирования и оставшихся элементов совпадает с прежним foreach.
+        static float DrainDue(List<KeyValuePair<int, float>> pending, long step)
+        {
+            float due = 0f;
+            int write = 0;
+            for (int read = 0; read < pending.Count; read++)
+            {
+                var item = pending[read];
+                if (step >= item.Key)
+                    due += item.Value;
+                else
+                    pending[write++] = item;
             }
+            if (write < pending.Count)
+                pending.RemoveRange(write, pending.Count - write);
+            return due;
         }
 
         // ── Дофамин и гомеостаз ──
@@ -654,7 +664,6 @@ namespace Dioma.Spikes
         public void RewardNow(float dopamine)
         {
             ApplyDopamine(dopamine, _wMax);
-            Normalize();
         }
 
         // ── D1/D2-пути (порт R-STDP из BrainCog BDM-SNN) ────────────
@@ -699,13 +708,7 @@ namespace Dioma.Spikes
         void UpdatePathTraces()
         {
             if (_eligD1 == null) return;
-            _plast.ReadEligibility(_elig);
-            for (int i = 0; i < _eligD1.Length; i++)
-            {
-                float e = _elig[i];
-                _eligD1[i] = _eligD1[i] * D1Decay + e;
-                _eligD2[i] = _eligD2[i] * D2Decay + (e > 0f ? e : 0f);
-            }
+            _plast.UpdatePathTraces(_eligD1, _eligD2, D1Decay, D2Decay);
         }
 
         /// Награда с выбором ПУТИ (R-STDP BDM-SNN):
@@ -722,16 +725,24 @@ namespace Dioma.Spikes
                     "RewardPathed требует EnablePathTraces(): тени D1/D2 ленивы");
             LastDopamine += dopamine;
             float lrDopa = _lr * dopamine;
+            Array.Clear(_normSums, 0, N);
+            int homeoAt = 0;
             for (int i = 0; i < _values.Length; i++)
             {
                 float trace = dopamine >= 0f ? _eligD1[i] : _eligD2[i];
                 float delta = lrDopa * trace;
-                if (delta == 0f)
-                    continue;
-                float w = _values[i] + delta;
-                _values[i] = Math.Clamp(w, _wMin, _wMax);
+                if (delta != 0f)
+                {
+                    float w = _values[i] + delta;
+                    _values[i] = Math.Clamp(w, _wMin, _wMax);
+                }
+                if (homeoAt < _homeoSynapses.Length && _homeoSynapses[homeoAt] == i)
+                {
+                    _normSums[_postOf[i]] += _values[i];
+                    homeoAt++;
+                }
             }
-            Normalize();
+            ApplyNormalization();
         }
 
         /// Награда с явным потолком весов. Рождение прожигает рефлексы ВЫШЕ
@@ -741,7 +752,6 @@ namespace Dioma.Spikes
         public void RewardNowCapped(float dopamine, float wCap)
         {
             ApplyDopamine(dopamine, wCap);
-            Normalize();
         }
 
         public float WMax => _wMax;
@@ -753,14 +763,23 @@ namespace Dioma.Spikes
             LastDopamine += dopamine;   // сумма за тик для растра подкрепления
             _plast.ReadEligibility(_elig);
             float lrDopa = _lr * dopamine;
+            Array.Clear(_normSums, 0, N);
+            int homeoAt = 0;
             for (int i = 0; i < _values.Length; i++)
             {
                 float delta = lrDopa * _elig[i];
-                if (delta == 0f)
-                    continue;
-                float w = _values[i] + delta;
-                _values[i] = Math.Clamp(w, _wMin, wCap);
+                if (delta != 0f)
+                {
+                    float w = _values[i] + delta;
+                    _values[i] = Math.Clamp(w, _wMin, wCap);
+                }
+                if (homeoAt < _homeoSynapses.Length && _homeoSynapses[homeoAt] == i)
+                {
+                    _normSums[_postOf[i]] += _values[i];
+                    homeoAt++;
+                }
             }
+            ApplyNormalization();
         }
 
         /// Мягкий гомеостаз: суммы входящих возбуждающих весов тянутся к
@@ -768,14 +787,16 @@ namespace Dioma.Spikes
         void Normalize()
         {
             Array.Clear(_normSums, 0, N);
-            for (int idx = 0; idx < _values.Length; idx++)
-                if (!_inhSyn[idx] && !_homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
-                    _normSums[_postOf[idx]] += _values[idx];
+            foreach (int idx in _homeoSynapses)
+                _normSums[_postOf[idx]] += _values[idx];
 
-            for (int idx = 0; idx < _values.Length; idx++)
+            ApplyNormalization();
+        }
+
+        void ApplyNormalization()
+        {
+            foreach (int idx in _homeoSynapses)
             {
-                if (_inhSyn[idx] || _homeoExcludePre.Contains(_regionOf[_preOf[idx]]))
-                    continue;
                 int post = _postOf[idx];
                 float target = _targetInSum[post];
                 if (_normSums[post] > 1e-6f && target > 1e-6f)
@@ -799,14 +820,8 @@ namespace Dioma.Spikes
         {
             LastDopamine = 0f;
             _kernel.Run(ext, StepsPerTick, _history);
-            long total = 0;
-            for (int s = 0; s < StepsPerTick; s++)
-            {
-                int at = s * N;
-                for (int i = 0; i < N; i++) total += _history[at + i];
-                AfterSubstep(at);
-            }
-            return total;
+            ProcessDueRewards(_stepCount); // delay=0
+            return FinishTick();
         }
 
         // ── Диагностика и доступ к весам ──
@@ -814,6 +829,7 @@ namespace Dioma.Spikes
         /// Копия весов CSR в каноническом порядке (сохранение существа,
         /// проверка протоколов обучения, наследование).
         public float[] CsrValues() => (float[])_values.Clone();
+        public float[] WeightsSnapshot() => CsrValues();
 
         /// Вес одного синапса CSR по индексу (протоколы смотрят конкретные
         /// пути; порядок совпадает с `edges` коннектома после отбора гейнами).

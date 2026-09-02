@@ -62,10 +62,11 @@ namespace Dioma.Spikes
             _dETick = FastMath.Powi(layout.DecayElig, spt);
         }
 
-        public void NoteSpikes(int[] history, int at, int row)
+        public int NoteSpikes(byte[] history, int at, int row)
         {
             int n = _l.N;
             int outAt = row * n;
+            int total = 0;
             for (int i = 0; i < n; i++)
             {
                 int spike = history[at + i];
@@ -79,21 +80,32 @@ namespace Dioma.Spikes
                 _postHist[outAt + i] = _tracePost[i];
                 if (spike > 0)
                 {
+                    total++;
                     _spikeCount[i]++;
                     _spikeSumS[i] += row;
                 }
             }
+            return total;
+        }
+
+        public int ProcessTick(byte[] history)
+        {
+            int total = 0;
+            int n = _l.N;
+            for (int row = 0; row < _l.StepsPerTick; row++)
+                total += NoteSpikes(history, row * n, row);
+            Apply();
+            return total;
         }
 
         public void Apply()
         {
-            int n = _l.N, spt = _l.StepsPerTick, nSyn = _l.PreOf.Length;
+            int n = _l.N, spt = _l.StepsPerTick;
             for (int i = 0; i < n; i++)
                 _meanOf[i] = MeanS(_spikeCount[i], _spikeSumS[i], spt);
 
             // ── Проход 1: LTP по входящим рёбрам (CSC). Для поста `mPost`
             //    фиксирован, поэтому строка истории пре читается локально.
-            Array.Clear(_ltp, 0, nSyn);
             for (int post = 0; post < n; post++)
             {
                 int cpost = _spikeCount[post];
@@ -117,17 +129,22 @@ namespace Dioma.Spikes
             // ── Проход 2: затухание + LTP + LTD в порядке CSR. LTD читает
             //    postHist[mPre·N + post] — `mPre` фиксирован внутри строки,
             //    так что это одна строка истории (3 КБ, L1).
-            for (int idx = 0; idx < nSyn; idx++)
+            for (int pre = 0; pre < n; pre++)
             {
-                int pre = _l.PreOf[idx];
-                float acc = (float)((double)_elig[idx] * _dETick);
-                if (_spikeCount[_l.PostOf[idx]] > 0)
-                    acc += _ltp[idx];
                 int cpre = _spikeCount[pre];
-                if (cpre > 0)
-                    acc -= (float)((double)_l.ALtd
-                        * _postHist[_meanOf[pre] * n + _l.PostOf[idx]] * cpre);
-                _elig[idx] = acc;
+                int postHistAt = _meanOf[pre] * n;
+                int end = _l.RowPtr[pre + 1];
+                for (int idx = _l.RowPtr[pre]; idx < end; idx++)
+                {
+                    int post = _l.PostOf[idx];
+                    float acc = (float)((double)_elig[idx] * _dETick);
+                    if (_spikeCount[post] > 0)
+                        acc += _ltp[idx];
+                    if (cpre > 0)
+                        acc -= (float)((double)_l.ALtd
+                            * _postHist[postHistAt + post] * cpre);
+                    _elig[idx] = acc;
+                }
             }
 
             Array.Clear(_spikeCount, 0, n);
@@ -146,6 +163,16 @@ namespace Dioma.Spikes
         }
 
         public void ReadEligibility(float[] dst) => Array.Copy(_elig, dst, _elig.Length);
+
+        public void UpdatePathTraces(float[] d1, float[] d2, float d1Decay, float d2Decay)
+        {
+            for (int i = 0; i < _elig.Length; i++)
+            {
+                float e = _elig[i];
+                d1[i] = d1[i] * d1Decay + e;
+                d2[i] = d2[i] * d2Decay + (e > 0f ? e : 0f);
+            }
+        }
 
         public void ClearEligibility() => Array.Clear(_elig, 0, _elig.Length);
 

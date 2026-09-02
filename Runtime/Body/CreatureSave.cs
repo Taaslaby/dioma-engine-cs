@@ -47,7 +47,7 @@ namespace Dioma.Body
 
             w.F32(SectionWeights, creature.Brain.CsrValues());
             w.F32(SectionBirth, creature.Brain.BirthWeights());
-            w.F32(SectionBlood, creature.Blood.Conc);
+            w.F32(SectionBlood, creature.Blood.ConcentrationSnapshot());
             w.JsonRaw(SectionGenome, GenomeJson(creature));
             return w.ToBytes();
         }
@@ -73,7 +73,7 @@ namespace Dioma.Body
             var blood = Blood.Creature();
             var conc = r.F32(SectionBlood);
             for (int i = 0; i < Chem.N && i < conc.Length; i++)
-                blood.Conc[i] = conc[i];
+                blood.SetConcentration(i, conc[i]);
 
             var creature = new Creature(brain, genome, blood);
             // Поверх снимка — выученное на момент сохранения. Порядок важен:

@@ -117,13 +117,14 @@ namespace Dioma.Spikes
             }
         }
 
-        public void Substep(int n, float[] state, float[] ext, float[] input,
-                            int[] history, int at)
+        public int Substep(int n, float[] state, float[] ext, float[] input,
+                           byte[] history, int at, int[] fired)
         {
             // Индексация колонок ОБРАТНАЯ состояниям: слоты состояния лежат
             // подряд (v[0..n), u[n..2n), h[2n..3n)), а параметры — по
             // нейронам (row i при b = i*17). Так и в Rust: states — слоты,
             // params — по-нейронно.
+            int firedCount = 0;
             for (int i = 0; i < n; i++)
             {
                 int b = i * HaapCols.N;
@@ -160,13 +161,15 @@ namespace Dioma.Spikes
 
                 // ── Спайк и сброс ──
                 bool spike = vNew >= _cols[b + (int)HaapCol.VThresh];
-                history[at + i] = spike ? 1 : 0;
+                history[at + i] = spike ? (byte)1 : (byte)0;
+                if (spike) fired[firedCount++] = i;
                 state[i] = spike ? _cols[b + (int)HaapCol.VReset] : vNew;
                 state[n + i] = spike
                     ? Math.Clamp(uNew + _cols[b + (int)HaapCol.DeltaU], 0f, 1f)
                     : uNew;
                 state[2 * n + i] = hNew;
             }
+            return firedCount;
         }
 
         /// Равновесие покоя нейрона с колонками `cols` от смещения `b`:

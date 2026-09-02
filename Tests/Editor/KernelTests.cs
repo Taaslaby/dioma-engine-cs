@@ -143,14 +143,14 @@ public class KernelTests
         // Синтетическая история: треть нейронов молчит, треть спайкует редко,
         // треть часто — так покрываются все ветки (cpre/cpost = 0 и > 0).
         int n = layout.N, spt = layout.StepsPerTick;
-        var history = new int[spt * n];
+        var history = new byte[spt * n];
         var rng = new System.Random(20260830);
         for (int s = 0; s < spt; s++)
             for (int i = 0; i < n; i++)
             {
                 int rate = i % 3;
-                history[s * n + i] = rate == 0 ? 0
-                    : rng.Next(100) < (rate == 1 ? 3 : 25) ? 1 : 0;
+                history[s * n + i] = rate == 0 ? (byte)0
+                    : rng.Next(100) < (rate == 1 ? 3 : 25) ? (byte)1 : (byte)0;
             }
 
         var ea = new float[brain.SynapseCount];
@@ -230,7 +230,7 @@ public class KernelTests
         var ext = new float[layout.N];
         for (int i = 0; i < layout.N; i++) ext[i] = 0.12f;
         for (int i = layout.N / 4; i < layout.N / 3; i++) ext[i] = 5f;
-        var history = new int[brain.StepsPerTick * layout.N];
+        var history = new byte[brain.StepsPerTick * layout.N];
 
         kernel.Run(ext, brain.StepsPerTick, history); // прогрев (Burst компилируется)
         var sw = Stopwatch.StartNew();

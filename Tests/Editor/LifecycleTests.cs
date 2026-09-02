@@ -13,7 +13,7 @@ public class LifecycleTests
     static Blood FedBlood(float glucose)
     {
         var b = Blood.Creature();
-        b.Conc[Chem.Glucose] = glucose;
+        b.SetConcentration(Chem.Glucose, glucose);
         return b;
     }
 
@@ -64,7 +64,7 @@ public class LifecycleTests
         int diedAt = -1;
         for (int t = 0; t < 20000; t++)
         {
-            blood.Conc[Chem.Glucose] = 30f;
+            blood.SetConcentration(Chem.Glucose, 30f);
             bool became = lc.Advance(blood, asleep: false);
             if (became) { diedAt = t; break; }
         }
@@ -86,7 +86,7 @@ public class LifecycleTests
         bool everRescuedPastMaxAge = false;
         for (int t = 0; t < 6000; t++)
         {
-            blood.Conc[Chem.Glucose] = 120f;   // выше RecoverGlucose, ниже HealGlucose
+            blood.SetConcentration(Chem.Glucose, 120f);   // выше RecoverGlucose, ниже HealGlucose
             lc.Advance(blood, asleep: false);
             if (lc.Age > lc.MaxAge && !lc.Dying && lc.Senescence > 0f)
                 everRescuedPastMaxAge = true;
@@ -102,7 +102,7 @@ public class LifecycleTests
         var blood = FedBlood(0f);
         for (int t = 0; t < 100; t++)
         {
-            blood.Conc[Chem.Glucose] = 0f;
+            blood.SetConcentration(Chem.Glucose, 0f);
             lc.Advance(blood, asleep: false);
         }
         // 100 тиков × 0.25 = 25 очков старческой копилки от катаболизма.
@@ -129,7 +129,7 @@ public class LifecycleTests
         int guard = 0;
         while (!lc.Dying && guard++ < 50000)
         {
-            blood.Conc[Chem.Glucose] = 10f;   // ниже RecoverGlucose (50)
+            blood.SetConcentration(Chem.Glucose, 10f);   // ниже RecoverGlucose (50)
             lc.Advance(blood, asleep: false);
         }
         Assert.IsTrue(lc.Dying, "должна начаться агония");
@@ -138,7 +138,7 @@ public class LifecycleTests
         bool died = false;
         for (int t = 0; t < Lifecycle.DyingTicks + 5 && !died; t++)
         {
-            blood.Conc[Chem.Glucose] = 10f;
+            blood.SetConcentration(Chem.Glucose, 10f);
             died = lc.Advance(blood, asleep: false);
         }
         Assert.IsTrue(lc.Dead, "по истечении агонии — смерть");
@@ -155,13 +155,13 @@ public class LifecycleTests
         int guard = 0;
         while (!lc.Dying && guard++ < 50000)
         {
-            blood.Conc[Chem.Glucose] = 0f;   // голод копит урон
+            blood.SetConcentration(Chem.Glucose, 0f);   // голод копит урон
             lc.Advance(blood, asleep: false);
         }
         Assert.IsTrue(lc.Dying, "голод должен довести до агонии");
 
         // Накормили выше RecoverGlucose — следующий тик спасает.
-        blood.Conc[Chem.Glucose] = 120f;
+        blood.SetConcentration(Chem.Glucose, 120f);
         lc.Advance(blood, asleep: false);
         Assert.IsFalse(lc.Dying, "сытость выше порога снимает голодную агонию");
         Assert.IsFalse(lc.Dead, "спасённый не умирает");
@@ -178,7 +178,7 @@ public class LifecycleTests
         bool died = false;
         for (int t = 0; t < 20000 && !died; t++)
         {
-            blood.Conc[Chem.Glucose] = 120f;   // сыт, но стар
+            blood.SetConcentration(Chem.Glucose, 120f);   // сыт, но стар
             died = lc.Advance(blood, asleep: false);
         }
         Assert.IsTrue(lc.Dead, "старость должна убить даже сытого");
@@ -193,7 +193,7 @@ public class LifecycleTests
         // Быстро в труп.
         for (int t = 0; t < 100000 && !lc.Dead; t++)
         {
-            blood.Conc[Chem.Glucose] = 0f;
+            blood.SetConcentration(Chem.Glucose, 0f);
             lc.Advance(blood, asleep: false);
         }
         Assert.IsTrue(lc.Dead);

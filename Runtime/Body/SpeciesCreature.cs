@@ -54,7 +54,7 @@ namespace Dioma.Body
             Genome = genome ?? Genome.Newborn();
             Genome.Metabolism.ApplyTo(Blood = blood ?? Bio.Blood.Creature());
             if (blood == null)
-                Blood.Conc[Chem.Hunger] = Creature.NewbornHunger;
+                Blood.SetConcentration(Chem.Hunger, Creature.NewbornHunger);
 
             _ext = new float[Brain.N];
             _prevSense = new float[Species.Sense.Count];
@@ -140,9 +140,9 @@ namespace Dioma.Body
             // ── 3. Тело: моторная работа и дефицит глюкозы в кровь ──
             int motorWork = 0;
             for (int p = 0; p < _poolSum.Length; p++) motorWork += _poolSum[p];
-            Blood.Loci[Locus.RateMotor] = motorWork;
-            Blood.Loci[Locus.GlucoseDeficit] =
-                MathF.Max(Bio.Blood.GlucoseAbundant - Blood.Conc[Chem.Glucose], 0f);
+            Blood.SetDriverLocus(Locus.RateMotor, motorWork);
+            Blood.SetDriverLocus(Locus.GlucoseDeficit,
+                MathF.Max(Bio.Blood.GlucoseAbundant - Blood.Conc[Chem.Glucose], 0f));
 
             if (sense.Blocked)
                 Collide();
@@ -385,6 +385,33 @@ namespace Dioma.Body
             var child = parent.Mutate(rng);
             child.AddLearnedInstincts(LearnedInstincts(), rng);
             return child;
+        }
+
+        public CreatureStateSnapshot CaptureState() => new CreatureStateSnapshot(
+            Genome, Brain.CsrValues(), Brain.BirthWeights(), Blood.ConcentrationSnapshot(),
+            Blood.Tick, Blood.Organ.Damage, FoodEaten, Collisions, AwakeTicks, SleepLeft, Nights);
+
+        public void RestoreState(CreatureStateSnapshot state)
+        {
+            if (state == null) throw new ArgumentNullException(nameof(state));
+            Brain.RestoreWeights(state.BrainWeights, state.BirthWeights);
+            Blood.RestoreState(state.BloodConcentrations, state.BloodTick, state.OrganDamage);
+            FoodEaten = state.FoodEaten;
+            Collisions = state.Collisions;
+            AwakeTicks = state.AwakeTicks;
+            SleepLeft = state.SleepLeft;
+            Nights = state.Nights;
+        }
+
+        /// Создать организм на уже загруженной топологии и восстановить
+        /// переносимое состояние. Новый мозг обязан соответствовать снимку.
+        public static SpeciesCreature FromState(SpeciesBinding binding,
+            CreatureStateSnapshot state)
+        {
+            if (state == null) throw new ArgumentNullException(nameof(state));
+            var creature = new SpeciesCreature(binding, state.Genome, Bio.Blood.Creature());
+            creature.RestoreState(state);
+            return creature;
         }
     }
 }

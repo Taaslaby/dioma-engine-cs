@@ -28,7 +28,8 @@ namespace Dioma.Spikes.Burst
         NativeArray<int> _preOf, _postOf, _inPtr, _inSyn, _spikeCount, _meanOf;
         NativeArray<long> _spikeSumS;
         NativeArray<float> _elig, _tracePre, _tracePost, _preHist, _postHist, _ltp;
-        NativeArray<int> _history;
+        NativeArray<byte> _history;
+        NativeArray<int> _noteTotal;
         int _historyCapacity;
         readonly PlasticityLayout _l;
 
@@ -53,6 +54,7 @@ namespace Dioma.Spikes.Burst
             _spikeCount = new NativeArray<int>(_n, Allocator.Persistent);
             _spikeSumS = new NativeArray<long>(_n, Allocator.Persistent);
             _meanOf = new NativeArray<int>(_n, Allocator.Persistent);
+            _noteTotal = new NativeArray<int>(1, Allocator.Persistent);
         }
 
         static NativeArray<T> Copy<T>(T[] src) where T : struct
@@ -62,33 +64,48 @@ namespace Dioma.Spikes.Burst
             return dst;
         }
 
-        public void NoteSpikes(int[] history, int at, int row)
+        public int NoteSpikes(byte[] history, int at, int row)
         {
-            EnsureHistory(history.Length);
-            NativeArray<int>.Copy(history, 0, _history, 0, history.Length);
-            new NoteJob
-            {
-                N = _n,
-                At = at,
-                Row = row,
-                DecayPre = _l.DecayPre,
-                DecayPost = _l.DecayPost,
-                History = _history,
-                TracePre = _tracePre,
-                TracePost = _tracePost,
-                PreHist = _preHist,
-                PostHist = _postHist,
-                SpikeCount = _spikeCount,
-                SpikeSumS = _spikeSumS,
-            }.Run();
+            EnsureHistory(_n);
+            NativeArray<byte>.Copy(history, at, _history, 0, _n);
+            RunNotes(0, row, 1);
+            return _noteTotal[0];
         }
+
+        public int ProcessTick(byte[] history)
+        {
+            int length = _n * _spt;
+            EnsureHistory(length);
+            NativeArray<byte>.Copy(history, 0, _history, 0, length);
+            RunNotes(0, 0, _spt);
+            Apply();
+            return _noteTotal[0];
+        }
+
+        void RunNotes(int at, int row, int rows) => new NoteJob
+        {
+            N = _n,
+            At = at,
+            Row = row,
+            Rows = rows,
+            DecayPre = _l.DecayPre,
+            DecayPost = _l.DecayPost,
+            History = _history,
+            TracePre = _tracePre,
+            TracePost = _tracePost,
+            PreHist = _preHist,
+            PostHist = _postHist,
+            SpikeCount = _spikeCount,
+            SpikeSumS = _spikeSumS,
+            Total = _noteTotal,
+        }.Run();
 
         void EnsureHistory(int length)
         {
             if (_historyCapacity >= length)
                 return;
             if (_history.IsCreated) _history.Dispose();
-            _history = new NativeArray<int>(length, Allocator.Persistent);
+            _history = new NativeArray<byte>(length, Allocator.Persistent);
             _historyCapacity = length;
         }
 
@@ -114,6 +131,16 @@ namespace Dioma.Spikes.Burst
         }.Run();
 
         public void ReadEligibility(float[] dst) => _elig.CopyTo(dst);
+
+        public void UpdatePathTraces(float[] d1, float[] d2, float d1Decay, float d2Decay)
+        {
+            for (int i = 0; i < _nSyn; i++)
+            {
+                float e = _elig[i];
+                d1[i] = d1[i] * d1Decay + e;
+                d2[i] = d2[i] * d2Decay + (e > 0f ? e : 0f);
+            }
+        }
 
         public void ClearEligibility()
         {
@@ -151,6 +178,7 @@ namespace Dioma.Spikes.Burst
             if (_spikeSumS.IsCreated) _spikeSumS.Dispose();
             if (_meanOf.IsCreated) _meanOf.Dispose();
             if (_history.IsCreated) _history.Dispose();
+            if (_noteTotal.IsCreated) _noteTotal.Dispose();
         }
 
         /// Подшаг: продвинуть зеркала следов, записать их в историю, накопить
@@ -159,38 +187,44 @@ namespace Dioma.Spikes.Burst
                       CompileSynchronously = true)]
         struct NoteJob : IJob
         {
-            public int N, At, Row;
+            public int N, At, Row, Rows;
             /// Распады держим в double НАМЕРЕННО: иначе Burst сворачивает
             /// `(double)trace * floatDecay` обратно во float-умножение, и
             /// след теряет точность fused-операции эталона (замерено:
             /// расхождение eligibility 3e-5 на первом же тике).
             public double DecayPre, DecayPost;
-            [ReadOnly] public NativeArray<int> History;
+            [ReadOnly] public NativeArray<byte> History;
             public NativeArray<float> TracePre, TracePost, PreHist, PostHist;
             public NativeArray<int> SpikeCount;
             public NativeArray<long> SpikeSumS;
+            public NativeArray<int> Total;
 
             public void Execute()
             {
-                int outAt = Row * N;
-                for (int i = 0; i < N; i++)
+                int total = 0;
+                for (int r = 0; r < Rows; r++)
                 {
-                    int spike = History[At + i];
-                    float add = spike > 0 ? 1f : 0f;
-                    // Одно округление, как скалярный mul_add в Rust. Считаем
-                    // через double: произведение двух float точно представимо
-                    // (24+24 ≤ 53 бита), значит округление ровно одно — при
-                    // сужении результата. Тот же приём, что в FastMath.
-                    TracePre[i] = (float)(TracePre[i] * DecayPre + add);
-                    TracePost[i] = (float)(TracePost[i] * DecayPost + add);
-                    PreHist[outAt + i] = TracePre[i];
-                    PostHist[outAt + i] = TracePost[i];
-                    if (spike > 0)
+                    int currentRow = Row + r;
+                    int historyAt = At + r * N;
+                    int outAt = currentRow * N;
+                    for (int i = 0; i < N; i++)
                     {
-                        SpikeCount[i] += 1;
-                        SpikeSumS[i] += Row;
+                        int spike = History[historyAt + i];
+                        float add = spike > 0 ? 1f : 0f;
+                        // Одно округление, как скалярный mul_add в Rust.
+                        TracePre[i] = (float)(TracePre[i] * DecayPre + add);
+                        TracePost[i] = (float)(TracePost[i] * DecayPost + add);
+                        PreHist[outAt + i] = TracePre[i];
+                        PostHist[outAt + i] = TracePost[i];
+                        if (spike > 0)
+                        {
+                            total++;
+                            SpikeCount[i] += 1;
+                            SpikeSumS[i] += currentRow;
+                        }
                     }
                 }
+                Total[0] = total;
             }
         }
 

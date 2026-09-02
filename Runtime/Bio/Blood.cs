@@ -117,6 +117,26 @@ namespace Dioma.Bio
         public float HealRate = 0.0001f;
     }
 
+    /// Читаемая извне шкала крови/локусов. Индексатор на запись доступен
+    /// только сборке биохимии: игровой слой не может менять состояние в
+    /// обход событий Blood.
+    public sealed class BloodValues : IReadOnlyList<float>
+    {
+        readonly float[] _values;
+
+        internal BloodValues(float[] values) => _values = values;
+        public int Count => _values.Length;
+        public float this[int index]
+        {
+            get => _values[index];
+            internal set => _values[index] = value;
+        }
+        public IEnumerator<float> GetEnumerator() => ((IEnumerable<float>)_values).GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        public float[] Snapshot() => (float[])_values.Clone();
+        internal void CopyFrom(float[] source) => Array.Copy(source, _values, _values.Length);
+    }
+
     public sealed class Blood
     {
         /// Потолок глюкозы после сна: сон не кормит, а лишь не даёт умереть
@@ -129,8 +149,8 @@ namespace Dioma.Bio
         public const float GlucoseAbundant = 150.0f;
 
         public int Tick;
-        public readonly float[] Conc = new float[Chem.N];
-        public readonly float[] Loci = Locus.Defaults();
+        public readonly BloodValues Conc = new BloodValues(new float[Chem.N]);
+        public readonly BloodValues Loci = new BloodValues(Locus.Defaults());
         public readonly BrainOrgan Organ = new BrainOrgan();
         public readonly List<KeyValuePair<int, float>> Pins = new List<KeyValuePair<int, float>>();
 
@@ -272,7 +292,7 @@ namespace Dioma.Bio
             float rate = Loci[Locus.RateMotor];
             float deficit = Loci[Locus.GlucoseDeficit];
             var defaults = Locus.Defaults();
-            Array.Copy(defaults, Loci, Locus.N);
+            Loci.CopyFrom(defaults);
             Loci[Locus.EventAte] = ate;
             Loci[Locus.EventWall] = wall;
             Loci[Locus.RateMotor] = rate;
@@ -330,6 +350,33 @@ namespace Dioma.Bio
         }
 
         public void BumpWall() => Loci[Locus.EventWall] = 1.0f;
+
+        /// Явная загрузка или отладочная настройка концентрации. Обычная
+        /// игровая динамика должна пользоваться IngestFood/BumpWall/…,
+        /// а не записывать химии напрямую.
+        public void SetConcentration(int chem, float value) =>
+            Conc[chem] = Math.Clamp(value, 0f, ConcMax);
+
+        /// Драйверы тела задают только свои входные локусы до Update().
+        public void SetDriverLocus(int locus, float value) => Loci[locus] = value;
+
+        /// Настройка не-драйверного локуса для детерминированных инструментов
+        /// и тестовых сценариев; игровой код использует события Blood.
+        public void SetLocusForSetup(int locus, float value) => Loci[locus] = value;
+
+        /// Снимок нужен сохранению: наружу не утекает изменяемый массив.
+        public float[] ConcentrationSnapshot() => Conc.Snapshot();
+
+        /// Восстановить persistence-состояние без воспроизведения реакций.
+        public void RestoreState(float[] concentrations, int tick, float organDamage)
+        {
+            if (concentrations == null) throw new ArgumentNullException(nameof(concentrations));
+            if (concentrations.Length != Chem.N)
+                throw new ArgumentException($"концентраций {concentrations.Length}, ожидалось {Chem.N}");
+            for (int i = 0; i < Chem.N; i++) SetConcentration(i, concentrations[i]);
+            Tick = tick;
+            Organ.Damage = Math.Clamp(organDamage, 0f, 1f);
+        }
 
         /// Сон: утомление и стресс спадают, глюкоза подтягивается к капу
         /// (ВНИМАНИЕ: выше капа — усекается, это не защитный кламп),

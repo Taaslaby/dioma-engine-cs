@@ -21,7 +21,7 @@ namespace Dioma.World
             var ticks = Json.Arr(root["ticks"]);
 
             var blood = Blood.Creature();
-            blood.Conc[Chem.Hunger] = 120f;   // новорождённый голоден
+            blood.SetConcentration(Chem.Hunger, 120f);   // новорождённый голоден
 
             double maxConc = 0, maxLoci = 0, maxParam = 0;
             int badPaid = 0, first = -1, t = 0;
@@ -29,9 +29,9 @@ namespace Dioma.World
             foreach (var item in ticks)
             {
                 var o = Json.Obj(item);
-                blood.Loci[Locus.RateMotor] = Json.F(o["rateMotor"]);
-                blood.Loci[Locus.GlucoseDeficit] =
-                    MathF.Max(Blood.GlucoseAbundant - blood.Conc[Chem.Glucose], 0f);
+                blood.SetDriverLocus(Locus.RateMotor, Json.F(o["rateMotor"]));
+                blood.SetDriverLocus(Locus.GlucoseDeficit,
+                    MathF.Max(Blood.GlucoseAbundant - blood.Conc[Chem.Glucose], 0f));
                 if (Json.Bool(o["wall"])) blood.BumpWall();
                 if (Json.Bool(o["ate"])) blood.IngestFood(60f);
                 blood.Update();

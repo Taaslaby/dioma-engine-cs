@@ -57,7 +57,7 @@ namespace Dioma.Spikes
         /// Прогнать `steps` подшагов при постоянном внешнем токе.
         /// `history` длиной `steps × N` заполняется спайками (0/1):
         /// подшаг `s`, нейрон `i` → `history[s * N + i]`.
-        void Run(float[] ext, int steps, int[] history);
+        void Run(float[] ext, int steps, byte[] history);
 
         /// Скопировать «напряжение» всех нейронов — первый слот состояния
         /// модели (мембрана у LIF, след у SRM0). Для визуализации; на

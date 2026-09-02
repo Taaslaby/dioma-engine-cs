@@ -50,17 +50,17 @@ public class HaapModelTests
         return layout;
     }
 
-    static (ManagedSpikeKernel<HaapModel> Kernel, int[] History) KernelWith(
+    static (ManagedSpikeKernel<HaapModel> Kernel, byte[] History) KernelWith(
         float[] profile, float[] ext)
     {
         var kernel = new ManagedSpikeKernel<HaapModel>(
             Layout(profile), new float[0], new HaapModel(Layout(profile)));
-        var history = new int[2000 * N];
+        var history = new byte[2000 * N];
         kernel.Run(ext, 2000, history);
         return (kernel, history);
     }
 
-    static int TotalSpikes(int[] history, int n, int steps)
+    static int TotalSpikes(byte[] history, int n, int steps)
     {
         int total = 0;
         for (int i = 0; i < n * steps; i++)
@@ -88,7 +88,7 @@ public class HaapModelTests
         var layout = Layout(profile);
         var kernel = new ManagedSpikeKernel<HaapModel>(
             layout, new float[0], new HaapModel(layout));
-        var history = new int[1000 * N];
+        var history = new byte[1000 * N];
         kernel.Run(ext, 1000, history);
         Assert.AreEqual(0, TotalSpikes(history, N, 1000),
             "тормозной ток не должен рождать спайков (иначе — PING-петля)");
@@ -104,7 +104,7 @@ public class HaapModelTests
         var layout = Layout(profile);
         var kernel = new ManagedSpikeKernel<HaapModel>(
             layout, new float[0], new HaapModel(layout));
-        var history = new int[10000 * N];
+        var history = new byte[10000 * N];
         kernel.Run(ext, 10000, history);
         Assert.AreEqual(0, TotalSpikes(history, N, 10000),
             "в тишине HAAP не стреляет (равновесие покоя)");
@@ -127,7 +127,7 @@ public class HaapModelTests
         var layout = Layout(profile);
         var kernel = new ManagedSpikeKernel<HaapModel>(
             layout, new float[0], new HaapModel(layout));
-        var history = new int[10000 * N];
+        var history = new byte[10000 * N];
         kernel.Run(ext, 10000, history);
 
         var membrane = new float[N];
@@ -149,7 +149,7 @@ public class HaapModelTests
         var layout = Layout(profile);
         var kernel = new ManagedSpikeKernel<HaapModel>(
             layout, new float[0], new HaapModel(layout));
-        var history = new int[4000 * N];
+        var history = new byte[4000 * N];
         kernel.Run(ext, 4000, history);
 
         int Count(int fromStep, int toStep)
@@ -208,10 +208,10 @@ public class HaapModelTests
         var layout = Layout(profile);
         var knockout = new ManagedSpikeKernel<HaapModel>(
             layout, new float[0], new HaapModel(layout));
-        var historyKo = new int[4000 * N];
+        var historyKo = new byte[4000 * N];
         knockout.Run(ext, 4000, historyKo);
 
-        int Count(int[] hist, int fromStep, int toStep)
+        int Count(byte[] hist, int fromStep, int toStep)
         {
             int total = 0;
             for (int s = fromStep; s < toStep; s++)
@@ -232,7 +232,7 @@ public class HaapModelTests
         var wildLayout = Layout(wildProfile);
         var wildKernel = new ManagedSpikeKernel<HaapModel>(
             wildLayout, new float[0], new HaapModel(wildLayout));
-        var historyWild = new int[4000 * N];
+        var historyWild = new byte[4000 * N];
         wildKernel.Run(ext, 4000, historyWild);
         int tailWild = Count(historyWild, 3000, 4000);
 

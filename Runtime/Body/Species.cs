@@ -61,6 +61,41 @@ namespace Dioma.Body
             .Reflex("WR", "ML")
             .Build();
 
+        /// Хищник-ученик: тот же движок, ДРУГАЯ экологическая ниша.
+        /// Едит МЯСО (трупы/живую мелочь), не ягоды: обоняние ловит
+        /// корм.хищника, объём порции крупнее (хищники едят реже и
+        /// больше), награда за добычу щедрее ягоды. Никаких особых
+        /// механик: те же каналы/пулы/актуаторы — вид есть ДАННЫЕ.
+        ///
+        /// Игровой смысл (акт 2 «Селекционер»): хищник учится охоте
+        /// СВОЕЙ жизнью — те же STDP/дофамин, те же смерти. Пруд
+        /// получает красную королеву: жертвы учатся избегать, хищник
+        /// — догонять.
+        public static SpeciesSpec Predator() => SpeciesBuilder.Create("predator")
+            .Sense(SmellLeft, "SL", Creature.SmellCurrent, required: true)
+            .Sense(SmellRight, "SR", Creature.SmellCurrent, required: true)
+            .Sense(MeatNear, null, 0f)
+            .Motor("left", "ML")
+            .Motor("right", "MR")
+            .Motor("tail", "TAIL")
+            .Actuate(Actuator.Difference(Steer, "left", "right", Creature.SteerScale))
+            .Actuate(Actuator.Sum(Drive, new[] { "tail" }, 1f / 600f))
+            .Actuate(Actuator.Ingest(Eat, MeatNear))
+            .Reward(RewardRule.ForEating(HuntDopamine))
+            .Reward(RewardRule.ForCollision(Creature.WallDopamine))
+            .Reward(RewardRule.ForApproach(0.4f, 0.02f, SmellLeft, SmellRight))
+            .Reflex("SL", "ML")
+            .Reflex("SR", "MR")
+            .Reflex("SL", "TAIL")
+            .Reflex("SR", "TAIL")
+            .Build();
+
+        /// Канал хищника: «добыча рядом» — труп ИЛИ живая жертва.
+        public const string MeatNear = "meat.near";
+        /// Дофамин за мясо: охота дороже ягоды — эволюционный стимул
+        /// specialised niches.
+        public const float HuntDopamine = 1.5f;
+
         /// Рыбка — ДРУГОЙ ВИД, а не стадия агента. Три моторных пула вместо
         /// двух: ML/MR рулят, TAIL даёт тягу СПАЙКАМИ. Ни строки движка под
         /// неё не правилось — только эти данные и раскладка в Прометее.

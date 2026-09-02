@@ -40,7 +40,7 @@ namespace Dioma.Body
         Channels = 8,
     }
 
-    /// Сцепка гена с полом (как в Creatures: гены на половых хромосомах
+    /// Сцепка гена с полом
     /// выражены только у одного пола).
     public enum SexLink : byte
     {

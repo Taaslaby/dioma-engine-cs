@@ -55,6 +55,8 @@ class Program
                 return TaasCheck.Run(new string[0]);
             case "s2b":
                 return Sardna2Brain.Run(new string[0]);
+            case "zeusbrain":
+                return ZeusBrain.Run(new string[0]);
             case "blockbrain":
                 return BlockBrain.Run(new string[0]);
             case "pattern":

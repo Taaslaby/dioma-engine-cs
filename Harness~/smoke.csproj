@@ -24,5 +24,6 @@
     <Compile Include="sardna2brain.cs" />
     <Compile Include="patternbox.cs" />
     <Compile Include="blockbrain.cs" />
+    <Compile Include="zeusbrain.cs" />
   </ItemGroup>
 </Project>

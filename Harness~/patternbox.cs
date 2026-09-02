@@ -76,10 +76,11 @@ class PatternBox
 
         // Одна попытка: подаём 4 стимула (по 1 тику каждый), каждый —
         // ток в SL (вверх) или SR (вниз). Мотор слушаем весь паттерн.
-        (int motorSpikes, int[] seq) Play(int[] seq)
+        (int motorSpikes, int lastTick, int[] seq) Play(int[] seq)
         {
             Array.Clear(_ext, 0, _ext.Length);
             int fired = 0;
+            int last = 0;
             foreach (var s in seq)
             {
                 var region = s == 0 ? _sl : _sr;
@@ -115,20 +116,21 @@ class PatternBox
                 for (int i = 0; i < iCount; i++)
                     _ext[iStart + i] += hcFeed[i] * 0.4f;
 
-                fired += MotorSpikes(_ext, 1);
+                last = MotorSpikes(_ext, 1);
+                fired += last;
                 Array.Clear(_ext, 0, _ext.Length);
                 _ = region;
             }
             // Межстимульная динамика памяти: след затухает, но живёт.
             wm.Tick();
-            return (fired, seq);
+            return (fired, last, seq);
         }
 
         bool IsPattern(int[] seq) =>
             seq[0] == 0 && seq[1] == 0 && seq[2] == 1 && seq[3] == 1;
 
         // ── Обучение: чередуем паттерн (25%) и случайные порядки ──
-        int rewards = 0;
+        int rewards = 0, punishments = 0;
         var history = new List<string>();
         for (int t = 0; t < Trials; t++)
         {
@@ -144,17 +146,32 @@ class PatternBox
                     for (int i = 0; i < 4; i++) seq[i] = (int)(rng.Unit() * 2);
                 } while (IsPattern(seq));
             }
-            var (fired, _) = Play(seq);
-            if (IsPattern(seq) && fired > 0)
+            // Surprise-кредитование: прогноз HC ≈ отклик прошлых тиков
+            // (что мотор делал бы на такой истории). Факт = отклик
+            // последнего тика. Награда ТОЛЬКО за превышение прогноза —
+            // иначе D-хвост всегда выигрывает кредит просто потому что
+            // он сильнее анатомически (замер: базы D=209 против U=32).
+            var (fired, last, _) = Play(seq);
+            int prev = fired - last;
+            double predicted = seq.Length > 1 ? prev / (double)(seq.Length - 1) : 0;
+            // Честное окно: превышение на ОДИН тик-эквивалент (не на 4 —
+            // при 15-17 наградах STDP не успевает закрепить путь; рыбка
+            // училась на ~95 кредитах).
+            double surprise = last - predicted;
+            _brain!.EnablePathTraces();
+            if (IsPattern(seq) && surprise > 0 && last > 0)
             {
-                // Награда через D1-след: eligibility всех тиков паттерна
-                // (включая HC-вход в I) копится в след с затуханием 0.8^k.
-                // Раньше не работал из-за неразличимого входа; с
-                // slot-major HC-входом порядок виден — след может
-                // закрепить путь 'HC-состояние→мотор'.
-                _brain!.EnablePathTraces();
-                _brain.RewardPathed(RewardDopamine);
+                // Симметричный сигнал: сверх-прогнозный отклик на UUDD
+                // — ДОБРО; на чужом порядке — ЗЛО (строит НЕ-действие,
+                // D2-путь BDM-SNN). Мозг учится: избыток отклика живёт
+                // ТОЛЬКО на паттерне.
+                _brain.RewardPathed(+RewardDopamine);
                 rewards++;
+            }
+            else if (!IsPattern(seq) && surprise > 0)
+            {
+                _brain.RewardPathed(-RewardDopamine * 0.5f);
+                punishments++;
             }
             // зазор: eligibility затухает, попытки независимы
             var quiet = new float[_brain!.N];
@@ -164,10 +181,10 @@ class PatternBox
                 wm.Tick();
             }
             if (t % 100 == 0)
-                history.Add($"попытка {t}: наград {rewards}");
+                history.Add($"попытка {t}: наград {rewards}, наказаний {punishments}");
         }
         Console.WriteLine($"[pattern] обучение: {Trials} попыток, " +
-                          $"наград {rewards} (паттерн встречался ~25%)");
+                          $"наград {rewards}, наказаний {punishments} (сюрприз-сигнал симметричен)");
 
         // ── Проверка ИЗБИРАТЕЛЬНОСТИ: база до обучения vs после ──
         // Отклик меряем на: паттерн UUDD и все его непаттерновые
@@ -176,7 +193,7 @@ class PatternBox
         // те же символы — рост за счёт отдельных стимулов одинаков).
         int Probe(int[] seq)
         {
-            var (fired, _) = Play(seq);
+            var (fired, _, _) = Play(seq);
             return fired;
         }
         int ProbeAvg(int[] seq, int reps)
